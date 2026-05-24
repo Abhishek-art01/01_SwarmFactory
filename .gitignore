@@ -1,0 +1,73 @@
+# =============================================================
+# Swarm Factory — .gitignore
+# =============================================================
+
+# ── Secrets — NEVER commit these ──────────────────────────────
+.env
+.env.local
+.env.production
+.env.staging
+*.key
+*.pem
+*.p12
+
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+ENV/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.log
+
+# ── Node / Frontend ───────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# ── Generated workspaces ──────────────────────────────────────
+# Temporary files created by agents during code generation
+/tmp/swarm_factory_workspace/
+
+# ── Session memory ────────────────────────────────────────────
+# Keep the sessions/ directory but ignore actual session files
+sessions/*.json
+!sessions/.gitkeep
+
+# ── Docker ────────────────────────────────────────────────────
+*.tar
+.docker/
+
+# ── IDE ───────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Azure / Terraform state ───────────────────────────────────
+*.tfstate
+*.tfstate.backup
+.terraform/
+azuredeploy.parameters.json
+
+# ── Test artifacts ────────────────────────────────────────────
+.coverage
+junit.xml
+test-results/

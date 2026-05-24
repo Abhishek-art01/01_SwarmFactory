@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff pytest pytest-cov pytest-asyncio
+
+      - name: Lint with ruff
+        run: ruff check backend/
+        continue-on-error: true
+
+      - name: Run tests with coverage
+        run: pytest tests/ --cov=backend --cov-report=xml --cov-report=term-missing -v
+        env:
+          # Provide stub values so imports don't fail; real calls are mocked in tests
+          AZURE_OPENAI_ENDPOINT: "https://stub.openai.azure.com/"
+          AZURE_OPENAI_API_KEY: "stub-key"
+          AZURE_OPENAI_DEPLOYMENT_GPT4O: "gpt-4o"
+          AZURE_OPENAI_DEPLOYMENT_PHI4: "phi-4"
+          AZURE_OPENAI_DEPLOYMENT_MINI: "gpt-4o-mini"
+          AZURE_OPENAI_API_VERSION: "2024-02-01"
+          GITHUB_TOKEN: "stub-token"
+          GITHUB_ORG: "stub-org"
+          AZURE_SUBSCRIPTION_ID: "00000000-0000-0000-0000-000000000000"
+          AZURE_RESOURCE_GROUP: "stub-rg"
+          AZURE_CONTAINER_REGISTRY: "stub.azurecr.io"
+          AZURE_CONTAINER_APP_ENV: "stub-env"
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 14

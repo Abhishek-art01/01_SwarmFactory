@@ -1,0 +1,89 @@
+version: "3.9"
+
+services:
+  # ── FastAPI application ──────────────────────────────────────────────────────
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    image: swarm-factory-api:local
+    container_name: swarm-factory-api
+    env_file:
+      - ../.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ../backend:/app/backend   # hot reload in dev
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    networks:
+      - swarm-net
+
+  # ── Redis (Celery broker + session store) ────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: swarm-factory-redis
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - swarm-net
+
+  # ── Celery worker ────────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    image: swarm-factory-api:local
+    container_name: swarm-factory-worker
+    env_file:
+      - ../.env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ../backend:/app/backend
+    command: ["celery", "-A", "backend.celery_app", "worker", "--loglevel=info", "--concurrency=2"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - swarm-net
+
+  # ── Nginx reverse proxy ──────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: swarm-factory-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - swarm-net
+
+volumes:
+  redis-data:
+
+networks:
+  swarm-net:
+    driver: bridge

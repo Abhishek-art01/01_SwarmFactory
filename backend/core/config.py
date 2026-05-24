@@ -1,0 +1,215 @@
+"""
+core/config.py
+--------------
+Central configuration loader for Swarm Factory backend.
+Reads all required environment variables from a .env file using Pydantic Settings.
+Any missing required variable will raise a clear error at startup — fail fast, fail loud.
+
+Usage:
+    from core.config import settings
+    print(settings.REDIS_URL)
+"""
+
+import logging
+from functools import lru_cache
+from typing import Optional
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+
+class Settings(BaseSettings):
+    """
+    All environment variables required by the Swarm Factory backend.
+
+    Pydantic Settings automatically reads from:
+      1. Environment variables (os.environ)
+      2. A .env file in the working directory
+
+    Any field without a default is REQUIRED — the app will refuse to start
+    if it's missing. This prevents silent misconfiguration in production.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,           # REDIS_URL ≠ redis_url
+        extra="ignore",                # Don't error on extra .env vars
+    )
+
+    # ── Azure OpenAI ──────────────────────────────────────────────────────────
+    AZURE_OPENAI_ENDPOINT: str = Field(
+        ...,
+        description="Full Azure OpenAI endpoint URL, e.g. https://my-resource.openai.azure.com/",
+    )
+    AZURE_OPENAI_API_KEY: str = Field(
+        ...,
+        description="Azure OpenAI API key (keep secret, never log this)",
+    )
+    AZURE_OPENAI_DEPLOYMENT: str = Field(
+        default="gpt-4o",
+        description="Azure deployment name for the primary model",
+    )
+    # Aliases used by individual agents and model wrappers
+    AZURE_OPENAI_DEPLOYMENT_GPT4O: str = Field(
+        default="gpt-4o",
+        description="GPT-4o deployment name",
+    )
+    AZURE_OPENAI_DEPLOYMENT_PHI4: str = Field(
+        default="phi-4",
+        description="Phi-4 deployment name",
+    )
+    AZURE_OPENAI_DEPLOYMENT_MINI: str = Field(
+        default="gpt-4o-mini",
+        description="GPT-4o-mini deployment name",
+    )
+    # Azure AI Search
+    AZURE_SEARCH_ENDPOINT: str = Field(default="", description="Azure AI Search endpoint")
+    AZURE_SEARCH_API_KEY: str = Field(default="", description="Azure AI Search API key")
+    AZURE_SEARCH_INDEX_NAME: str = Field(default="swarm-memory", description="Search index name")
+    # GitHub
+    GITHUB_TOKEN: str = Field(default="", description="GitHub PAT for pushing generated repos")
+    GITHUB_ORG: str = Field(default="", description="GitHub org or username")
+    # Azure Container Apps
+    AZURE_SUBSCRIPTION_ID: str = Field(default="", description="Azure subscription ID")
+    AZURE_RESOURCE_GROUP: str = Field(default="swarm-factory-rg", description="Azure resource group")
+    AZURE_CONTAINER_REGISTRY: str = Field(default="", description="ACR login server")
+    AZURE_CONTAINER_APP_ENV: str = Field(default="swarm-factory-env", description="Container Apps env name")
+    # Session storage
+    SESSION_STORE_PATH: str = Field(default="./sessions", description="Path to session JSON files")
+    # Bing Search
+    BING_SEARCH_API_KEY: str = Field(default="", description="Bing Search API key")
+    AZURE_OPENAI_API_VERSION: str = Field(
+        default="2024-02-01",
+        description="Azure OpenAI REST API version string",
+    )
+
+    # ── Redis / Celery ────────────────────────────────────────────────────────
+    REDIS_URL: str = Field(
+        ...,
+        description="Redis connection URL, e.g. redis://localhost:6379/0",
+    )
+
+    # ── Security ──────────────────────────────────────────────────────────────
+    API_KEY: str = Field(
+        ...,
+        description="Static API key the frontend must send in X-API-Key header",
+    )
+    SECRET_KEY: str = Field(
+        ...,
+        description="Secret key used for signing tokens / session data",
+    )
+
+    # ── Application tunables ──────────────────────────────────────────────────
+    APP_ENV: str = Field(
+        default="development",
+        description="'development' | 'staging' | 'production'",
+    )
+    LOG_LEVEL: str = Field(
+        default="INFO",
+        description="Python logging level: DEBUG | INFO | WARNING | ERROR",
+    )
+    MAX_CONCURRENT_JOBS: int = Field(
+        default=5,
+        description="Maximum number of swarm jobs that can run in parallel",
+    )
+    JOB_TIMEOUT_SECONDS: int = Field(
+        default=600,
+        description="Hard timeout (seconds) before a job is marked failed",
+    )
+
+    # ── Rate limiting ─────────────────────────────────────────────────────────
+    RATE_LIMIT_REQUESTS: int = Field(
+        default=10,
+        description="Maximum requests allowed per window per IP",
+    )
+    RATE_LIMIT_WINDOW_SECONDS: int = Field(
+        default=60,
+        description="Rate-limit sliding window size in seconds",
+    )
+
+    # ── Fallback model chain (see fallback_chain.py) ──────────────────────────
+    FALLBACK_MODEL_PRIMARY: str = Field(
+        default="gpt-4o",
+        description="Primary model in the fallback chain",
+    )
+    FALLBACK_MODEL_SECONDARY: str = Field(
+        default="phi-4",
+        description="Secondary model used if primary fails",
+    )
+    FALLBACK_MODEL_TERTIARY: str = Field(
+        default="gpt-4o-mini",
+        description="Last-resort model in the fallback chain",
+    )
+
+    # ── Validators ────────────────────────────────────────────────────────────
+    @field_validator("APP_ENV")
+    @classmethod
+    def validate_env(cls, v: str) -> str:
+        """Ensure APP_ENV is one of the known values."""
+        allowed = {"development", "staging", "production"}
+        if v not in allowed:
+            raise ValueError(f"APP_ENV must be one of {allowed}, got '{v}'")
+        return v
+
+    @field_validator("LOG_LEVEL")
+    @classmethod
+    def validate_log_level(cls, v: str) -> str:
+        """Ensure LOG_LEVEL maps to a valid Python logging constant."""
+        allowed = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        upper = v.upper()
+        if upper not in allowed:
+            raise ValueError(f"LOG_LEVEL must be one of {allowed}, got '{v}'")
+        return upper
+
+    @property
+    def is_production(self) -> bool:
+        """Convenience flag: True when running in production mode."""
+        return self.APP_ENV == "production"
+
+    @property
+    def celery_broker_url(self) -> str:
+        """Celery broker URL — same Redis instance we use for job state."""
+        return self.REDIS_URL
+
+    @property
+    def celery_result_backend(self) -> str:
+        """Celery result backend URL."""
+        return self.REDIS_URL
+
+
+# ── Singleton accessor ────────────────────────────────────────────────────────
+# @lru_cache means this function is only executed ONCE per process lifetime.
+# Every subsequent call returns the same Settings object — no re-reading .env.
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """
+    Return the application-wide Settings singleton.
+
+    Using lru_cache ensures we parse .env exactly once at startup,
+    and the same object is reused everywhere. Import and call this
+    function instead of instantiating Settings directly.
+
+    Returns:
+        Settings: Fully validated settings object.
+
+    Raises:
+        pydantic_core.ValidationError: If any required variable is missing or invalid.
+    """
+    _settings = Settings()  # type: ignore[call-arg]
+    logger.info(
+        "Configuration loaded",
+        extra={
+            "app_env": _settings.APP_ENV,
+            "log_level": _settings.LOG_LEVEL,
+            "max_concurrent_jobs": _settings.MAX_CONCURRENT_JOBS,
+        },
+    )
+    return _settings
+
+
+# Module-level convenience alias used throughout the codebase:
+#   from core.config import settings
+settings: Settings = get_settings()
