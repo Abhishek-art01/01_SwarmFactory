@@ -167,6 +167,7 @@ def _git_init_commit_push(local_path: str, clone_url: str, token: str) -> None:
         "GIT_AUTHOR_EMAIL": "swarm@factory.ai",
         "GIT_COMMITTER_NAME": "Swarm Factory",
         "GIT_COMMITTER_EMAIL": "swarm@factory.ai",
+        "GIT_TERMINAL_PROMPT": "0",
     }
 
     steps: list[tuple[str, list[str]]] = [
@@ -187,6 +188,7 @@ def _git_init_commit_push(local_path: str, clone_url: str, token: str) -> None:
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=30,
             )
             if result.returncode != 0:
                 # Mask token in error output
@@ -198,3 +200,5 @@ def _git_init_commit_push(local_path: str, clone_url: str, token: str) -> None:
                 )
         except FileNotFoundError as exc:
             raise GitOpsError("'git' executable not found on PATH") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise GitOpsError(f"Git step '{step_name}' timed out after 30 seconds") from exc

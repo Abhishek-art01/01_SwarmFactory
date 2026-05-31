@@ -120,7 +120,7 @@ class TestAgent(BaseAgent):
             files_json=files_json,
         )
 
-        raw_response = await self.call_llm(
+        raw_response = await self._call_llm(
             system_prompt=TEST_WRITER_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=8000,
@@ -215,10 +215,10 @@ class TestAgent(BaseAgent):
         Returns:
             A validated TestOutput instance.
         """
-        cleaned = self.clean_json(raw)
+        cleaned = self._parse_json(raw)
 
         try:
-            parsed: dict = json.loads(cleaned)
+            parsed: dict = cleaned
         except json.JSONDecodeError:
             logger.warning(
                 "[test] Response is not valid JSON — wrapping as bare conftest.py"

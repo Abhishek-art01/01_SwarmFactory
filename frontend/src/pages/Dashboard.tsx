@@ -57,7 +57,7 @@ export default function Dashboard() {
     return () => clearTimeout(t);
   }, [swarm.isComplete]);
 
-  const activeAgentCount = swarm.agents.filter((a) => a.status === "running").length;
+  const activeAgentCount = (swarm.agents ?? []).filter((a) => a.status === "running").length;
 
   if (!jobId) return null;
 
@@ -125,8 +125,8 @@ export default function Dashboard() {
           <div className="space-y-4">
             <SectionLabel>Agent Swarm</SectionLabel>
             <SwarmVisualizer
-              agents={swarm.agents}
-              isLoading={swarm.agents.length === 0 && !swarm.isComplete}
+              agents={swarm.agents ?? []}
+              isLoading={(swarm.agents ?? []).length === 0 && !swarm.isComplete}
             />
           </div>
 

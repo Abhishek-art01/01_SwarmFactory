@@ -12,8 +12,8 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { createSwarmSocket, WsConnectionState, SwarmEvent } from "../lib/websocket";
-import { getJobStatus, Agent, JobStatus } from "../lib/api";
+import { createSwarmSocket, WsConnectionState } from "../lib/websocket";
+import { ApiError, getJobStatus, Agent, JobStatus } from "../lib/api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -68,6 +68,7 @@ export function useSwarm(jobId: string | null): SwarmState {
   const [wsState, setWsState] = useState<WsConnectionState>("closed");
   const [isComplete, setIsComplete] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [shouldPoll, setShouldPoll] = useState(true);
 
   // Ref so polling can check if WS is alive before making HTTP calls
   const wsStateRef = useRef<WsConnectionState>("closed");
@@ -83,9 +84,25 @@ export function useSwarm(jobId: string | null): SwarmState {
   // What does this do? Applies a status/progress update to a single agent by id.
   const patchAgent = useCallback(
     (agentId: string, patch: Partial<Agent>) => {
-      setAgents((prev) =>
-        prev.map((a) => (a.id === agentId ? { ...a, ...patch } : a))
-      );
+      setAgents((prev) => {
+        const current = Array.isArray(prev) ? prev : [];
+        const existing = current.find((a) => a.id === agentId);
+        if (!existing) {
+          return [
+            ...current,
+            {
+              id: agentId,
+              name: agentId,
+              role: "Swarm agent",
+              status: "idle",
+              progress: 0,
+              updatedAt: new Date().toISOString(),
+              ...patch,
+            },
+          ];
+        }
+        return current.map((a) => (a.id === agentId ? { ...a, ...patch } : a));
+      });
     },
     []
   );
@@ -100,6 +117,7 @@ export function useSwarm(jobId: string | null): SwarmState {
 
     setIsComplete(false);
     setError(null);
+    setShouldPoll(true);
 
     const socket = createSwarmSocket(jobId);
 
@@ -185,7 +203,7 @@ export function useSwarm(jobId: string | null): SwarmState {
   // Polls /api/status every 3 s. Skips the call if the WS is healthy ("open")
   // to avoid double-updating state from both channels simultaneously.
   useEffect(() => {
-    if (!jobId || isComplete) return;
+    if (!jobId || isComplete || !shouldPoll) return;
 
     const tick = async () => {
       // Don't poll while the WS is delivering updates
@@ -196,9 +214,14 @@ export function useSwarm(jobId: string | null): SwarmState {
         setStage(status.stage);
         setStageIndex(status.stageIndex);
         setOverallProgress(status.overallProgress);
-        setAgents(status.agents);
+        setAgents(Array.isArray(status.agents) ? status.agents : []);
         if (status.error) setError(status.error);
       } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+          setShouldPoll(false);
+          setError(`Job '${jobId}' was not found.`);
+          return;
+        }
         console.error("API error: polling /api/status →", err);
       }
     };
@@ -208,7 +231,7 @@ export function useSwarm(jobId: string | null): SwarmState {
     void tick();
 
     return () => clearInterval(id);
-  }, [jobId, isComplete]);
+  }, [jobId, isComplete, shouldPoll]);
 
   return {
     agents,

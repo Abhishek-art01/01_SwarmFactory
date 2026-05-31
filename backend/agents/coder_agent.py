@@ -115,7 +115,7 @@ class CoderAgent(BaseAgent):
         # ---- Build prompt & call LLM ---------------------------------------
         user_prompt = CODER_USER_TEMPLATE.format(architect_json=architect_json)
 
-        raw_response = await self.call_llm(
+        raw_response = await self._call_llm(
             system_prompt=CODER_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=8000,
@@ -169,11 +169,11 @@ class CoderAgent(BaseAgent):
             json.JSONDecodeError: If the response looks like JSON but can't be parsed.
             pydantic.ValidationError: If the parsed JSON doesn't match CoderOutput.
         """
-        cleaned = self.clean_json(raw)
+        cleaned = self._parse_json(raw)
 
         # Try to parse as JSON first
         try:
-            parsed: dict = json.loads(cleaned)
+            parsed: dict = cleaned
         except json.JSONDecodeError:
             # Fallback: treat entire response as a single file's content
             logger.warning(

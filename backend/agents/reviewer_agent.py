@@ -152,7 +152,7 @@ class ReviewerAgent(BaseAgent):
         )
 
         # ── Call LLM ─────────────────────────────────────────────────────────
-        raw_response = await self.call_llm(
+        raw_response = await self._call_llm(
             system_prompt=REVIEWER_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=3000,
@@ -186,10 +186,10 @@ class ReviewerAgent(BaseAgent):
             json.JSONDecodeError: If the response cannot be parsed as JSON.
             pydantic.ValidationError: If the parsed object fails schema validation.
         """
-        cleaned = self.clean_json(raw)
+        cleaned = self._parse_json(raw)
 
         try:
-            parsed: dict = json.loads(cleaned)
+            parsed: dict = cleaned
         except json.JSONDecodeError as exc:
             logger.error("[reviewer] Failed to parse LLM response as JSON | error=%s", exc)
             raise

@@ -129,17 +129,17 @@ class ArchitectAgent(BaseAgent):
         user_prompt = self._user_builder.build(plan_json=plan_json)
 
         # Ask GPT-4o to design the complete technical blueprint for this plan
-        raw_response = await self.call_llm(
+        raw_response = await self._call_llm(
             system_prompt=ARCHITECT_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=3000,   # Architect needs more room: folder tree + contracts + deps
         )
 
         # Strip any markdown code fences the model may have wrapped the JSON in
-        cleaned = self.clean_json(raw_response)
+        cleaned = self._parse_json(raw_response)
 
         # Parse the raw string to a dict
-        parsed_dict: dict = json.loads(cleaned)
+        parsed_dict: dict = cleaned
 
         # Validate with Pydantic — enforces schema correctness before coder agent
         # consumes this output; catches missing fields or wrong types early

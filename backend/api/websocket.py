@@ -1,336 +1,789 @@
 """
 api/websocket.py
 ----------------
-WS /ws/:job_id — Bidirectional streaming of agent events to the frontend.
-
-HOW BIDIRECTIONAL WEBSOCKET STREAMING WORKS HERE:
-──────────────────────────────────────────────────
-1. The client opens a WebSocket connection to /ws/{job_id}.
-2. The server immediately starts polling Redis Pub/Sub channel "job:{job_id}:events".
-3. Whenever the Celery worker (running the swarm) publishes an event to that
-   channel, this handler receives it and forwards it to the WebSocket client.
-4. The client can also SEND messages (e.g. "cancel") which we receive and act on.
-5. When the job completes or fails, a final event is emitted and the connection
-   is closed gracefully.
-
-Why Redis Pub/Sub and not direct asyncio queues?
-  - The Celery worker runs in a DIFFERENT process (possibly on a different machine).
-  - asyncio queues only work within the same process.
-  - Redis Pub/Sub is the standard cross-process message bus for this pattern.
-
-Event shapes the client will receive:
-  { "type": "agent_update", "agent": "coder",   "status": "running", "output": "..." }
-  { "type": "file_written", "filename": "main.py" }
-  { "type": "complete",     "github_url": "...",  "azure_url": "...", "coverage": 92 }
-  { "type": "error",        "message": "..." }
+WS /ws/:job_id - Bidirectional streaming of agent events to the frontend.
 """
 
 import asyncio
 import json
 import logging
-from typing import Any
+import traceback
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Literal
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 from starlette.websockets import WebSocketState
+
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Included in server.py with no prefix, so the full path is WS /ws/{job_id}
 router = APIRouter(tags=["WebSocket"])
 
-# How long (seconds) to wait between Redis subscription checks before
-# sending a keepalive ping to the client.
 KEEPALIVE_INTERVAL = 15.0
-
-# How long (seconds) to wait for the job to appear in Redis before giving up.
+REDIS_READ_TIMEOUT = 1.0
 JOB_WAIT_TIMEOUT = 30.0
+WS_POLICY_VIOLATION = 1008
+WS_INTERNAL_ERROR = 1011
 
 
-# ── Event helpers ─────────────────────────────────────────────────────────────
+class ClientMessage(BaseModel):
+    """Validated inbound WebSocket command."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["cancel", "ping", "close"]
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def type_must_be_present(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("type is required")
+        return value
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _short_message(message: Any, limit: int = 1000) -> str | None:
+    if message is None:
+        return None
+    text = message if isinstance(message, str) else repr(message)
+    return text if len(text) <= limit else f"{text[:limit]}...<truncated>"
+
+
+def _error_payload(error_type: str, message: str, **kwargs: Any) -> str:
+    payload = {"type": "error", "error_type": error_type, "message": message, **kwargs}
+    return json.dumps(payload)
+
 
 def _build_event(event_type: str, **kwargs: Any) -> str:
-    """
-    Serialise an event dict to a JSON string ready to send over the WebSocket.
-
-    Args:
-        event_type: The 'type' field of the event (e.g. 'agent_update').
-        **kwargs:   Additional fields merged into the event dict.
-
-    Returns:
-        str: JSON-encoded event string.
-    """
     payload = {"type": event_type, **kwargs}
     return json.dumps(payload)
 
 
-async def _safe_send(ws: WebSocket, message: str) -> bool:
-    """
-    Send a text message over the WebSocket, catching any connection errors.
+def _ws_log(
+    level: int,
+    event: str,
+    *,
+    connection_id: str,
+    job_id: str,
+    user_id: str | None = None,
+    incoming_message: Any = None,
+    exc: BaseException | None = None,
+    **fields: Any,
+) -> None:
+    """Emit one JSON log record with WebSocket context and optional stack trace."""
 
-    Returns False if the connection is already closed (so the caller can stop).
+    payload: dict[str, Any] = {
+        "timestamp": _utc_now(),
+        "event": event,
+        "websocket_connection_id": connection_id,
+        "job_id": job_id,
+        "user_id": user_id,
+        "incoming_message": _short_message(incoming_message),
+        **fields,
+    }
+    if exc is not None:
+        payload["error_type"] = type(exc).__name__
+        payload["error"] = str(exc)
+        payload["stack_trace"] = "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        )
 
-    Args:
-        ws:      The active WebSocket connection.
-        message: JSON string to send.
+    logger.log(level, json.dumps(payload, default=str))
 
-    Returns:
-        bool: True if send succeeded, False if the connection is gone.
-    """
+
+async def _safe_send(
+    ws: WebSocket,
+    message: str,
+    *,
+    connection_id: str,
+    job_id: str,
+    user_id: str | None,
+) -> bool:
     try:
-        if ws.client_state == WebSocketState.CONNECTED:
-            # await: we're waiting for the OS to flush the TCP send buffer
+        if (
+            ws.client_state == WebSocketState.CONNECTED
+            and ws.application_state == WebSocketState.CONNECTED
+        ):
             await ws.send_text(message)
             return True
         return False
     except Exception as exc:
-        logger.warning("WebSocket send failed", extra={"error": str(exc)})
+        _ws_log(
+            logging.WARNING,
+            "websocket_send_failed",
+            connection_id=connection_id,
+            job_id=job_id,
+            user_id=user_id,
+            incoming_message=message,
+            exc=exc,
+        )
         return False
 
 
-# ── WebSocket handler ─────────────────────────────────────────────────────────
+async def _close_gracefully(
+    ws: WebSocket,
+    *,
+    code: int,
+    reason: str,
+    connection_id: str,
+    job_id: str,
+    user_id: str | None,
+) -> None:
+    if (
+        ws.client_state != WebSocketState.CONNECTED
+        or ws.application_state != WebSocketState.CONNECTED
+    ):
+        return
+    try:
+        await ws.close(code=code, reason=reason[:123])
+    except Exception as exc:
+        _ws_log(
+            logging.WARNING,
+            "websocket_close_failed",
+            connection_id=connection_id,
+            job_id=job_id,
+            user_id=user_id,
+            exc=exc,
+            close_code=code,
+            close_reason=reason,
+        )
 
-# HOW BIDIRECTIONAL STREAMING WORKS HERE:
-# We run two concurrent asyncio tasks inside this handler:
-#   Task A (listen_to_redis): subscribes to Redis Pub/Sub and forwards
-#                             messages to the WebSocket client.
-#   Task B (listen_to_client): reads messages from the client (e.g. "cancel").
-# Both tasks run concurrently via asyncio.gather(). When either completes
-# (job done, client disconnected, error), we cancel the other.
+
+def _validate_job_id(job_id: str) -> str | None:
+    try:
+        uuid.UUID(job_id, version=4)
+    except (TypeError, ValueError):
+        return "job_id must be a valid UUID4"
+    return None
+
+
+def _authenticate(websocket: WebSocket) -> tuple[bool, str | None, str | None]:
+    token = websocket.query_params.get("api_key") or websocket.query_params.get("token")
+    if not token:
+        return False, None, "Missing WebSocket API key"
+    if token != settings.API_KEY:
+        return False, None, "Invalid WebSocket API key"
+    return True, "api-key", None
+
+
+def _parse_client_message(raw: str) -> tuple[ClientMessage | None, str | None]:
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return None, f"Invalid JSON payload: {exc.msg}"
+
+    if not isinstance(decoded, dict):
+        return None, "WebSocket payload must be a JSON object"
+
+    try:
+        return ClientMessage.model_validate(decoded), None
+    except ValidationError as exc:
+        return None, exc.errors(include_url=False)[0]["msg"]
+
+
 @router.websocket("/ws/{job_id}")
 async def websocket_endpoint(websocket: WebSocket, job_id: str) -> None:
     """
     Stream real-time agent events for a specific job over WebSocket.
 
-    Opens a Redis Pub/Sub subscription on channel 'job:{job_id}:events'
-    and forwards every published event to the connected WebSocket client.
-    Also listens for inbound messages from the client (e.g. cancellation).
-
-    Args:
-        websocket: The WebSocket connection (injected by FastAPI/Starlette).
-        job_id:    UUID4 of the job to stream events for.
+    Lifecycle:
+      1. Accept connection so failures can be returned as JSON frames.
+      2. Authenticate the query-string API key.
+      3. Validate job_id and verify the Redis job state exists.
+      4. Subscribe to Redis Pub/Sub and forward events to the client.
+      5. Validate every inbound client message before business logic.
+      6. Close with a meaningful WebSocket close code/reason on failures.
     """
-    # await: WebSocket handshake — TCP upgrade from HTTP to WS protocol
-    await websocket.accept()
-    logger.info("WebSocket connected", extra={"job_id": job_id})
 
-    # We need a SEPARATE Redis client for Pub/Sub because subscribing puts
-    # the connection into a special mode where you can only issue subscribe/
-    # unsubscribe/psubscribe commands — you can't interleave regular GET/SET.
+    connection_id = str(uuid.uuid4())
+    user_id: str | None = None
+    app_redis: aioredis.Redis | None = None
     redis_client: aioredis.Redis | None = None
-    pubsub = None
+    pubsub: Any = None
+
+    await websocket.accept()
+    _ws_log(
+        logging.INFO,
+        "websocket_connected",
+        connection_id=connection_id,
+        job_id=job_id,
+        client=str(websocket.client) if websocket.client else None,
+    )
 
     try:
-        # ── Verify job exists ─────────────────────────────────────────────────
-        app_redis: aioredis.Redis = websocket.app.state.redis
+        authenticated, user_id, auth_error = _authenticate(websocket)
+        if not authenticated:
+            _ws_log(
+                logging.WARNING,
+                "websocket_auth_failed",
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+                reason=auth_error,
+            )
+            await _safe_send(
+                websocket,
+                _error_payload("authentication_failed", auth_error or "Authentication failed"),
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            await _close_gracefully(
+                websocket,
+                code=WS_POLICY_VIOLATION,
+                reason=auth_error or "Authentication failed",
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            return
 
-        # await: checking Redis to ensure job_id is valid before we accept streaming
-        job_exists = await app_redis.exists(f"job:{job_id}")
+        job_id_error = _validate_job_id(job_id)
+        if job_id_error:
+            _ws_log(
+                logging.WARNING,
+                "websocket_job_id_invalid",
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+                reason=job_id_error,
+            )
+            await _safe_send(
+                websocket,
+                _error_payload("invalid_job_id", job_id_error),
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            await _close_gracefully(
+                websocket,
+                code=WS_POLICY_VIOLATION,
+                reason=job_id_error,
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            return
+
+        try:
+            app_redis = websocket.app.state.redis
+            job_exists = await asyncio.wait_for(
+                app_redis.exists(f"job:{job_id}"), timeout=JOB_WAIT_TIMEOUT
+            )
+        except asyncio.TimeoutError as exc:
+            _ws_log(
+                logging.ERROR,
+                "websocket_job_lookup_timeout",
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+                exc=exc,
+            )
+            await _safe_send(
+                websocket,
+                _error_payload("timeout", "Timed out while verifying job state"),
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            await _close_gracefully(
+                websocket,
+                code=WS_INTERNAL_ERROR,
+                reason="Timed out while verifying job state",
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            return
+        except Exception as exc:
+            _ws_log(
+                logging.ERROR,
+                "websocket_job_lookup_failed",
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+                exc=exc,
+            )
+            await _safe_send(
+                websocket,
+                _error_payload("database_error", "Unable to verify job state"),
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            await _close_gracefully(
+                websocket,
+                code=WS_INTERNAL_ERROR,
+                reason="Unable to verify job state",
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            return
+
         if not job_exists:
             await _safe_send(
                 websocket,
-                _build_event("error", message=f"Job '{job_id}' not found"),
+                _error_payload("job_not_found", f"Job '{job_id}' not found"),
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
             )
-            await websocket.close(code=1008)  # Policy violation
+            await _close_gracefully(
+                websocket,
+                code=WS_POLICY_VIOLATION,
+                reason="Job not found",
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+            )
             return
 
-        # ── Open a dedicated Redis connection for Pub/Sub ─────────────────────
-        # await: creating a new TCP connection to Redis for the pub/sub channel
         redis_client = aioredis.from_url(
-            websocket.app.state.redis.connection_pool.connection_kwargs.get(
-                "connection_class", None
-            ) and str(websocket.app.state.redis),
+            settings.REDIS_URL,
             encoding="utf-8",
             decode_responses=True,
+            socket_timeout=REDIS_READ_TIMEOUT + 5,
         )
-        # Simpler: re-read the URL from settings
-        from core.config import settings as _settings
-        redis_client = aioredis.from_url(
-            _settings.REDIS_URL, encoding="utf-8", decode_responses=True
-        )
-
         pubsub = redis_client.pubsub()
         channel = f"job:{job_id}:events"
 
-        # await: sending the SUBSCRIBE command to Redis
-        await pubsub.subscribe(channel)
-        logger.info("Redis Pub/Sub subscribed", extra={"job_id": job_id, "channel": channel})
+        try:
+            await asyncio.wait_for(pubsub.subscribe(channel), timeout=JOB_WAIT_TIMEOUT)
+        except asyncio.TimeoutError as exc:
+            _ws_log(
+                logging.ERROR,
+                "websocket_redis_subscribe_timeout",
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+                exc=exc,
+                channel=channel,
+            )
+            await _safe_send(
+                websocket,
+                _error_payload("timeout", "Timed out subscribing to job events"),
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            await _close_gracefully(
+                websocket,
+                code=WS_INTERNAL_ERROR,
+                reason="Timed out subscribing to job events",
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            return
+        except Exception as exc:
+            _ws_log(
+                logging.ERROR,
+                "websocket_redis_subscribe_failed",
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+                exc=exc,
+                channel=channel,
+            )
+            await _safe_send(
+                websocket,
+                _error_payload("database_error", "Unable to subscribe to job events"),
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            await _close_gracefully(
+                websocket,
+                code=WS_INTERNAL_ERROR,
+                reason="Unable to subscribe to job events",
+                connection_id=connection_id,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            return
 
-        # Send an initial "connected" acknowledgment so the client knows
-        # the stream is live and it doesn't need to wait silently.
+        _ws_log(
+            logging.INFO,
+            "websocket_redis_subscribed",
+            connection_id=connection_id,
+            job_id=job_id,
+            user_id=user_id,
+            channel=channel,
+        )
         await _safe_send(
             websocket,
             _build_event("connected", job_id=job_id, message="Stream connected"),
+            connection_id=connection_id,
+            job_id=job_id,
+            user_id=user_id,
         )
 
-        # ── Concurrent task: forward Redis events → WebSocket ────────────────
+        stop_event = asyncio.Event()
+
         async def listen_to_redis() -> None:
-            """
-            Receive messages from Redis Pub/Sub and forward to the WebSocket client.
-
-            Runs until the job emits a terminal event ('complete' or 'error')
-            or until cancelled by the outer gather().
-            """
             keepalive_counter = 0.0
-
-            while True:
+            while not stop_event.is_set():
                 try:
-                    # await: non-blocking get from the Redis Pub/Sub queue.
-                    # timeout=1.0 means we check every second; this lets us
-                    # send keepalive pings even when no events are flowing.
                     message = await pubsub.get_message(
-                        ignore_subscribe_messages=True, timeout=1.0
+                        ignore_subscribe_messages=True,
+                        timeout=REDIS_READ_TIMEOUT,
                     )
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
-                    logger.error(
-                        "Redis Pub/Sub read error",
-                        extra={"job_id": job_id, "error": str(exc)},
+                    _ws_log(
+                        logging.ERROR,
+                        "websocket_redis_read_failed",
+                        connection_id=connection_id,
+                        job_id=job_id,
+                        user_id=user_id,
+                        exc=exc,
                     )
-                    break
+                    await _safe_send(
+                        websocket,
+                        _error_payload("database_error", "Lost connection to job event stream"),
+                        connection_id=connection_id,
+                        job_id=job_id,
+                        user_id=user_id,
+                    )
+                    stop_event.set()
+                    return
 
                 if message and message.get("type") == "message":
-                    raw_data: str = message["data"]
-                    logger.debug(
-                        "Event received from Redis",
-                        extra={"job_id": job_id, "data": raw_data[:120]},
+                    raw_data = message.get("data")
+                    if raw_data is None:
+                        _ws_log(
+                            logging.WARNING,
+                            "websocket_redis_message_missing_data",
+                            connection_id=connection_id,
+                            job_id=job_id,
+                            user_id=user_id,
+                            incoming_message=message,
+                        )
+                        continue
+
+                    if not isinstance(raw_data, str):
+                        raw_data = json.dumps(raw_data, default=str)
+
+                    _ws_log(
+                        logging.DEBUG,
+                        "websocket_redis_message_received",
+                        connection_id=connection_id,
+                        job_id=job_id,
+                        user_id=user_id,
+                        incoming_message=raw_data,
                     )
 
-                    # Forward the event verbatim to the WebSocket client
-                    sent = await _safe_send(websocket, raw_data)
+                    sent = await _safe_send(
+                        websocket,
+                        raw_data,
+                        connection_id=connection_id,
+                        job_id=job_id,
+                        user_id=user_id,
+                    )
                     if not sent:
-                        break  # Client disconnected
+                        stop_event.set()
+                        return
 
-                    # Check if this is a terminal event — if so, we're done
                     try:
                         parsed = json.loads(raw_data)
-                        if parsed.get("type") in ("complete", "error"):
-                            logger.info(
-                                "Terminal event received, closing stream",
-                                extra={"job_id": job_id, "event_type": parsed.get("type")},
-                            )
-                            return  # Exit cleanly — this task is done
-                    except json.JSONDecodeError:
-                        pass  # Non-JSON message; ignore and continue
+                    except json.JSONDecodeError as exc:
+                        _ws_log(
+                            logging.WARNING,
+                            "websocket_redis_message_invalid_json",
+                            connection_id=connection_id,
+                            job_id=job_id,
+                            user_id=user_id,
+                            incoming_message=raw_data,
+                            exc=exc,
+                        )
+                        continue
 
+                    if isinstance(parsed, dict) and parsed.get("type") in ("complete", "error"):
+                        _ws_log(
+                            logging.INFO,
+                            "websocket_terminal_event_received",
+                            connection_id=connection_id,
+                            job_id=job_id,
+                            user_id=user_id,
+                            incoming_message=raw_data,
+                            event_type=parsed.get("type"),
+                        )
+                        stop_event.set()
+                        return
                 else:
-                    # No message this tick — send a keepalive ping periodically
-                    keepalive_counter += 1.0
+                    keepalive_counter += REDIS_READ_TIMEOUT
                     if keepalive_counter >= KEEPALIVE_INTERVAL:
                         keepalive_counter = 0.0
                         sent = await _safe_send(
-                            websocket, _build_event("ping", job_id=job_id)
+                            websocket,
+                            _build_event("ping", job_id=job_id),
+                            connection_id=connection_id,
+                            job_id=job_id,
+                            user_id=user_id,
                         )
                         if not sent:
-                            break
+                            stop_event.set()
+                            return
 
-        # ── Concurrent task: receive messages from the WebSocket client ───────
         async def listen_to_client() -> None:
-            """
-            Handle inbound messages from the WebSocket client.
-
-            Currently supports:
-              { "type": "cancel" } — marks the job as cancelled in Redis.
-              { "type": "ping"   } — echoes a pong (connection check).
-
-            Runs until the client disconnects or sends a 'close' message.
-            """
-            while True:
+            while not stop_event.is_set():
                 try:
-                    # await: blocking read — waiting for the client to send us a message.
-                    # This yields control to the event loop so listen_to_redis() can run.
                     raw = await websocket.receive_text()
-                except WebSocketDisconnect:
-                    logger.info(
-                        "WebSocket client disconnected",
-                        extra={"job_id": job_id},
+                except WebSocketDisconnect as exc:
+                    _ws_log(
+                        logging.INFO,
+                        "websocket_client_disconnected",
+                        connection_id=connection_id,
+                        job_id=job_id,
+                        user_id=user_id,
+                        close_code=exc.code,
+                        close_reason=getattr(exc, "reason", None),
                     )
+                    stop_event.set()
                     return
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
-                    logger.warning(
-                        "WebSocket receive error",
-                        extra={"job_id": job_id, "error": str(exc)},
+                    _ws_log(
+                        logging.WARNING,
+                        "websocket_receive_failed",
+                        connection_id=connection_id,
+                        job_id=job_id,
+                        user_id=user_id,
+                        exc=exc,
                     )
+                    stop_event.set()
                     return
 
-                try:
-                    msg = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue  # Ignore non-JSON
+                parsed, validation_error = _parse_client_message(raw)
+                if validation_error or parsed is None:
+                    _ws_log(
+                        logging.WARNING,
+                        "websocket_client_message_invalid",
+                        connection_id=connection_id,
+                        job_id=job_id,
+                        user_id=user_id,
+                        incoming_message=raw,
+                        validation_error=validation_error,
+                    )
+                    await _safe_send(
+                        websocket,
+                        _error_payload(
+                            "invalid_message",
+                            validation_error or "Invalid WebSocket payload",
+                        ),
+                        connection_id=connection_id,
+                        job_id=job_id,
+                        user_id=user_id,
+                    )
+                    await _close_gracefully(
+                        websocket,
+                        code=WS_POLICY_VIOLATION,
+                        reason=validation_error or "Invalid WebSocket payload",
+                        connection_id=connection_id,
+                        job_id=job_id,
+                        user_id=user_id,
+                    )
+                    stop_event.set()
+                    return
 
-                msg_type = msg.get("type")
-                logger.info(
-                    "Client message received",
-                    extra={"job_id": job_id, "msg_type": msg_type},
+                _ws_log(
+                    logging.INFO,
+                    "websocket_client_message_received",
+                    connection_id=connection_id,
+                    job_id=job_id,
+                    user_id=user_id,
+                    incoming_message=raw,
+                    msg_type=parsed.type,
                 )
 
-                if msg_type == "cancel":
-                    # Mark the job as cancelled in Redis so the Celery worker
-                    # will stop processing on its next checkpoint.
+                if parsed.type == "cancel":
                     try:
-                        # await: writing cancellation flag to Redis
-                        await app_redis.hset(
-                            f"job:{job_id}", mapping={"status": "cancelled"}
+                        await asyncio.wait_for(
+                            app_redis.hset(f"job:{job_id}", mapping={"status": "cancelled"}),
+                            timeout=JOB_WAIT_TIMEOUT,
+                        )
+                    except asyncio.TimeoutError as exc:
+                        _ws_log(
+                            logging.ERROR,
+                            "websocket_cancel_timeout",
+                            connection_id=connection_id,
+                            job_id=job_id,
+                            user_id=user_id,
+                            incoming_message=raw,
+                            exc=exc,
                         )
                         await _safe_send(
                             websocket,
-                            _build_event("cancelled", job_id=job_id, message="Job cancelled"),
+                            _error_payload("timeout", "Timed out cancelling job"),
+                            connection_id=connection_id,
+                            job_id=job_id,
+                            user_id=user_id,
                         )
+                        stop_event.set()
+                        return
                     except Exception as exc:
-                        logger.error(
-                            "Failed to cancel job",
-                            extra={"job_id": job_id, "error": str(exc)},
+                        _ws_log(
+                            logging.ERROR,
+                            "websocket_cancel_failed",
+                            connection_id=connection_id,
+                            job_id=job_id,
+                            user_id=user_id,
+                            incoming_message=raw,
+                            exc=exc,
                         )
-                    return  # Close the WS after cancellation
+                        await _safe_send(
+                            websocket,
+                            _error_payload("database_error", "Unable to cancel job"),
+                            connection_id=connection_id,
+                            job_id=job_id,
+                            user_id=user_id,
+                        )
+                        stop_event.set()
+                        return
 
-                elif msg_type == "ping":
-                    await _safe_send(websocket, _build_event("pong", job_id=job_id))
+                    await _safe_send(
+                        websocket,
+                        _build_event("cancelled", job_id=job_id, message="Job cancelled"),
+                        connection_id=connection_id,
+                        job_id=job_id,
+                        user_id=user_id,
+                    )
+                    stop_event.set()
+                    return
 
-        # ── Run both tasks concurrently ───────────────────────────────────────
-        # asyncio.gather runs both coroutines on the same event loop thread.
-        # When ONE finishes (job complete, client disconnects), we cancel the other.
-        # return_exceptions=True prevents one task's exception from silently
-        # swallowing the other task's result.
-        await asyncio.gather(
-            listen_to_redis(),
-            listen_to_client(),
-            return_exceptions=True,
+                if parsed.type == "ping":
+                    await _safe_send(
+                        websocket,
+                        _build_event("pong", job_id=job_id),
+                        connection_id=connection_id,
+                        job_id=job_id,
+                        user_id=user_id,
+                    )
+                    continue
+
+                if parsed.type == "close":
+                    stop_event.set()
+                    return
+
+        tasks = [
+            asyncio.create_task(listen_to_redis(), name=f"ws:{connection_id}:redis"),
+            asyncio.create_task(listen_to_client(), name=f"ws:{connection_id}:client"),
+        ]
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        stop_event.set()
+
+        for task in done:
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _ws_log(
+                    logging.ERROR,
+                    "websocket_task_crashed",
+                    connection_id=connection_id,
+                    job_id=job_id,
+                    user_id=user_id,
+                    exc=exc,
+                    task_name=task.get_name(),
+                )
+                await _safe_send(
+                    websocket,
+                    _error_payload("internal_error", "WebSocket stream task failed"),
+                    connection_id=connection_id,
+                    job_id=job_id,
+                    user_id=user_id,
+                )
+
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    except WebSocketDisconnect as exc:
+        _ws_log(
+            logging.INFO,
+            "websocket_disconnected",
+            connection_id=connection_id,
+            job_id=job_id,
+            user_id=user_id,
+            close_code=exc.code,
+            close_reason=getattr(exc, "reason", None),
         )
-
-    except WebSocketDisconnect:
-        logger.info("WebSocket disconnected during setup", extra={"job_id": job_id})
-
     except Exception as exc:
-        logger.error(
-            "WebSocket handler error",
-            extra={"job_id": job_id, "error": str(exc)},
+        _ws_log(
+            logging.ERROR,
+            "websocket_handler_unhandled_exception",
+            connection_id=connection_id,
+            job_id=job_id,
+            user_id=user_id,
+            exc=exc,
         )
         await _safe_send(
             websocket,
-            _build_event("error", message="Internal server error in WebSocket handler"),
+            _error_payload("internal_error", "Internal server error in WebSocket handler"),
+            connection_id=connection_id,
+            job_id=job_id,
+            user_id=user_id,
         )
-
+        await _close_gracefully(
+            websocket,
+            code=WS_INTERNAL_ERROR,
+            reason="Internal server error in WebSocket handler",
+            connection_id=connection_id,
+            job_id=job_id,
+            user_id=user_id,
+        )
     finally:
-        # ── Cleanup ───────────────────────────────────────────────────────────
         if pubsub:
             try:
-                # await: sending UNSUBSCRIBE to Redis to clean up the subscription
                 await pubsub.unsubscribe()
                 await pubsub.aclose()
-            except Exception:
-                pass  # Best-effort cleanup
+            except Exception as exc:
+                _ws_log(
+                    logging.WARNING,
+                    "websocket_pubsub_cleanup_failed",
+                    connection_id=connection_id,
+                    job_id=job_id,
+                    user_id=user_id,
+                    exc=exc,
+                )
 
         if redis_client:
             try:
-                # await: closing the dedicated Redis connection for Pub/Sub
                 await redis_client.aclose()
-            except Exception:
-                pass
+            except Exception as exc:
+                _ws_log(
+                    logging.WARNING,
+                    "websocket_redis_cleanup_failed",
+                    connection_id=connection_id,
+                    job_id=job_id,
+                    user_id=user_id,
+                    exc=exc,
+                )
 
-        # Close the WebSocket if it's still open
-        if websocket.client_state == WebSocketState.CONNECTED:
-            try:
-                await websocket.close()
-            except Exception:
-                pass
-
-        logger.info("WebSocket handler exited", extra={"job_id": job_id})
+        await _close_gracefully(
+            websocket,
+            code=1000,
+            reason="WebSocket stream closed",
+            connection_id=connection_id,
+            job_id=job_id,
+            user_id=user_id,
+        )
+        _ws_log(
+            logging.INFO,
+            "websocket_handler_exited",
+            connection_id=connection_id,
+            job_id=job_id,
+            user_id=user_id,
+        )

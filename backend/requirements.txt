@@ -1,28 +1,38 @@
-# Swarm Factory — backend dependencies
+# Swarm Factory — requirements.txt
+# Python 3.11 or 3.12 REQUIRED (not 3.13/3.14 — pydantic-core build fails)
 # Install: pip install -r requirements.txt
 
-# ── Web framework ─────────────────────────────────────────────────────────────
+# ── Web framework ──────────────────────────────────────────────
 fastapi==0.111.0
-uvicorn[standard]==0.30.1          # ASGI server with websocket support
-python-multipart==0.0.9            # Required for form data parsing
+uvicorn[standard]==0.30.1
+python-multipart==0.0.9
 
-# ── Data validation ───────────────────────────────────────────────────────────
+# ── Data validation ────────────────────────────────────────────
 pydantic==2.7.1
-pydantic-settings==2.3.0           # BaseSettings for .env loading
+pydantic-settings==2.3.0
 
-# ── Job queue ─────────────────────────────────────────────────────────────────
+# ── Job queue ──────────────────────────────────────────────────
 celery==5.4.0
-redis==5.0.6                       # sync redis (used by Celery)
-redis[asyncio]==5.0.6              # async redis (used by FastAPI)
+redis==5.0.6
 
-# ── AI / Agent framework ──────────────────────────────────────────────────────
-pyautogen==0.2.33                  # Microsoft AutoGen multi-agent framework
-openai==1.30.1                     # Required by AutoGen for Azure OpenAI
+# ── Microsoft AI stack (ALL Azure) ─────────────────────────────
+ag2==0.13.2          # AutoGen by Microsoft (Python 3.11+ compatible name)
+openai>=1.30.1       # Azure OpenAI SDK
+httpx>=0.28.1        # HTTP client (ag2 requires >=0.28.1)
 
-# ── Async utilities ───────────────────────────────────────────────────────────
-anyio==4.4.0                       # Async compatibility layer
+# ── DevOps tools ───────────────────────────────────────────────
+PyGithub==2.3.0
+docker==7.1.0
+requests==2.32.3
+gitpython==3.1.43
 
-# ── Development / Testing ─────────────────────────────────────────────────────
-pytest==8.2.0
+# ── Code quality ───────────────────────────────────────────────
+ruff==0.4.8
+pytest==8.2.2
 pytest-asyncio==0.23.7
-httpx==0.27.0                      # Async HTTP client for FastAPI TestClient
+pytest-cov==5.0.0
+
+# ── Utilities ──────────────────────────────────────────────────
+python-dotenv==1.0.1
+tenacity==8.3.0
+anyio==4.4.0

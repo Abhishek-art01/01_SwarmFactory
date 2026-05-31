@@ -116,17 +116,17 @@ class PlannerAgent(BaseAgent):
         user_prompt = self._user_builder.build(requirement=requirement)
 
         # Ask GPT-4o to classify the requirement and produce a task graph
-        raw_response = await self.call_llm(
+        raw_response = await self._call_llm(
             system_prompt=PLANNER_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=2000,
         )
 
         # Strip any markdown code fences the model may have wrapped the JSON in
-        cleaned = self.clean_json(raw_response)
+        cleaned = self._parse_json(raw_response)
 
         # Parse the raw string to a dict
-        parsed_dict: dict = json.loads(cleaned)
+        parsed_dict: dict = cleaned
 
         # Validate with Pydantic — ensures all required fields are present and typed
         # correctly before any downstream agent attempts to consume this output

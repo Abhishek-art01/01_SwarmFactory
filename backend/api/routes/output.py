@@ -9,7 +9,7 @@ produced by mediator_agent and the deployment URLs from devops_agent.
 
 import json
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
@@ -46,6 +46,30 @@ class OutputResponse(BaseModel):
     azure_url: Optional[str] = None
     coverage: Optional[int] = None
     file_count: int
+
+
+def _extract_files(raw: Any) -> dict[str, str]:
+    """
+    Normalize stored job output to the API's file map contract.
+
+    Older/generated outputs may be either:
+      - {"path.py": "content"}
+      - {"files": {"path.py": "content"}, "dependencies": [...], ...}
+    """
+
+    if not isinstance(raw, dict):
+        return {}
+
+    candidate = raw.get("files") if isinstance(raw.get("files"), dict) else raw
+    files: dict[str, str] = {}
+    for path, content in candidate.items():
+        if not isinstance(path, str):
+            continue
+        if isinstance(content, str):
+            files[path] = content
+        else:
+            files[path] = json.dumps(content, default=str, indent=2)
+    return files
 
 
 # HTTP GET /api/output/:job_id — returns the generated codebase for a completed job
@@ -114,7 +138,7 @@ async def get_output(job_id: str, request: Request) -> OutputResponse:
     files: dict[str, str] = {}
     if raw_output:
         try:
-            files = json.loads(raw_output)
+            files = _extract_files(json.loads(raw_output))
         except json.JSONDecodeError as exc:
             logger.error("Output JSON corrupt", extra={"job_id": job_id, "error": str(exc)})
             raise HTTPException(

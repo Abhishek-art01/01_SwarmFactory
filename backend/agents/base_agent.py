@@ -1,161 +1,169 @@
 """
-base_agent.py — Abstract base class for all Swarm Factory agents.
+agents/base_agent.py
+---------------------
+Abstract base class for all 7 Swarm Factory agents.
 
-All 7 agents inherit from BaseAgent and must implement run().
-Provides shared LLM call logic with retry, logging, and error handling.
+MULTIMODEL DESIGN (Microsoft Azure stack):
+  - Every agent call goes through model_router.py
+  - model_router picks: gpt-4o | phi-4 | gpt-4o-mini based on task complexity
+  - fallback_chain.py handles failures: gpt-4o → phi-4 → gpt-4o-mini → cache
+  - All 3 models are Azure OpenAI deployments — 100% Microsoft stack
 """
-
+import os
 import json
 import logging
-import os
 from abc import ABC, abstractmethod
-from typing import Any
 
 from dotenv import load_dotenv
 from openai import AsyncAzureOpenAI
 from tenacity import (
     retry,
-    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    before_sleep_log,
+    retry_if_exception_type,
 )
 
 load_dotenv()
-
 logger = logging.getLogger(__name__)
 
 
-def clean_json(raw: str) -> str:
+def _get_azure_client(deployment: str) -> AsyncAzureOpenAI:
     """
-    Strip markdown code fences from LLM output before JSON parsing.
-
-    LLMs sometimes wrap JSON in ```json ... ``` blocks.
-    This function removes those wrappers so json.loads() can parse cleanly.
+    Create an Azure OpenAI client for a specific model deployment.
 
     Args:
-        raw: Raw string from LLM response.
+        deployment: The Azure deployment name (gpt-4o, phi-4, gpt-4o-mini)
 
     Returns:
-        Cleaned string ready for json.loads().
+        AsyncAzureOpenAI client pointed at the correct deployment
     """
-    raw = raw.strip()
-    if raw.startswith("```"):
-        # Split on ``` and take the inner block
-        raw = raw.split("```")[1]
-        # Strip the optional "json" language tag on the opening fence
-        if raw.startswith("json"):
-            raw = raw[4:]
-    return raw.strip()
+    return AsyncAzureOpenAI(
+        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+        api_key=os.environ["AZURE_OPENAI_API_KEY"],
+        api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-01"),
+    )
 
 
 class BaseAgent(ABC):
     """
-    Abstract base class for all Swarm Factory agents.
+    Abstract base for all 7 agents.
 
-    Provides:
-    - Shared Azure OpenAI async client (initialized once per instance)
-    - call_llm() with retry logic and structured logging
-    - clean_json() utility exposed as a static method
-    - Abstract run() that every subclass must implement
+    Multimodel usage:
+      self.model         = primary model for this agent (set per-agent)
+      self._call_llm()   = makes the actual API call with retry
+      fallback_chain     = handles model switching when primary fails
 
-    Attributes:
-        name: Human-readable agent identifier (set by subclass).
-        model: Azure OpenAI deployment name to use for this agent.
+    Each agent sets self.model in their class body. The orchestrator's
+    fallback_chain.py handles switching between models on failure.
     """
 
-    name: str = "base"
+    # Subclasses set this to choose their primary model
     model: str = ""
 
     def __init__(self) -> None:
-        """Initialize the Azure OpenAI async client from environment variables."""
-        self._client = AsyncAzureOpenAI(
-            azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-            api_key=os.environ["AZURE_OPENAI_API_KEY"],
-            api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-01"),
-        )
-        # Default to the gpt-4o deployment unless subclass overrides self.model
-        if not self.model:
-            self.model = os.environ.get("AZURE_OPENAI_DEPLOYMENT_GPT4O", "gpt-4o")
+        """
+        Initialize Azure OpenAI clients for all 3 models.
+        All agents have access to all 3 models — model_router decides which to use.
+        """
+        # Primary model (set by subclass)
+        primary = self.model or os.environ.get("AZURE_OPENAI_DEPLOYMENT_GPT4O", "gpt-4o")
+        self.model = primary
+
+        # Three clients — one per Azure deployment
+        # model_router and fallback_chain use these to switch models
+        self._client_gpt4o     = _get_azure_client(os.environ.get("AZURE_OPENAI_DEPLOYMENT_GPT4O", "gpt-4o"))
+        self._client_phi4      = _get_azure_client(os.environ.get("AZURE_OPENAI_DEPLOYMENT_PHI4", "phi-4"))
+        self._client_mini      = _get_azure_client(os.environ.get("AZURE_OPENAI_DEPLOYMENT_MINI", "gpt-4o-mini"))
+
+        # Default client = primary model
+        self._client = self._client_gpt4o
+
+        logger.info("Agent initialized | agent=%s | model=%s", self.__class__.__name__, self.model)
 
     @abstractmethod
-    async def run(self, input_data: Any) -> Any:
-        """
-        Execute the agent's core logic.
-
-        Every agent must implement this method. It receives the output of the
-        previous pipeline stage and returns a validated Pydantic model.
-
-        Args:
-            input_data: Output from the upstream agent (or raw user string for Agent 1).
-
-        Returns:
-            A validated Pydantic model specific to this agent's OutputSchema.
-        """
-        ...
+    async def run(self, input_data) -> object:
+        """Every agent must implement this. Input and output types vary per agent."""
 
     @retry(
-        retry=retry_if_exception_type((json.JSONDecodeError, ValueError, KeyError)),
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-        reraise=True,
+        retry=retry_if_exception_type(Exception),
     )
-    async def call_llm(self, system_prompt: str, user_prompt: str, max_tokens: int = 2000) -> str:
+    async def _call_llm(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.2,
+        max_tokens: int = 2000,
+        model_override: str = "",
+    ) -> str:
         """
-        Make an async Azure OpenAI chat completion call with retry logic.
+        Make an Azure OpenAI API call with automatic retry.
 
-        Retries up to 3 times on JSON parse errors, value errors, or key errors.
-        Uses temperature=0.2 for consistent, structured JSON output.
-        Logs the request at DEBUG level and any retry attempts at WARNING.
+        Uses the agent's primary model by default.
+        fallback_chain.py calls this with model_override to switch models.
 
         Args:
-            system_prompt: The ROLE + TASK + OUTPUT FORMAT instructions for the model.
-            user_prompt:   The specific user request / context for this call.
-            max_tokens:    Maximum tokens in the response (default 2000).
+            system_prompt:  The system instruction for GPT
+            user_prompt:    The user message / task description
+            temperature:    0.2 = consistent/structured, 0.7 = creative
+            max_tokens:     Max tokens in response
+            model_override: Force a specific model (used by fallback chain)
 
         Returns:
-            Raw response content string from the model (may contain markdown fences).
-
-        Raises:
-            openai.APIError: On unrecoverable API-level failures.
-            tenacity.RetryError: If all 3 retry attempts are exhausted.
+            Raw string response from the model
         """
-        logger.debug(
-            "[%s] Calling LLM | model=%s | max_tokens=%d | system_len=%d | user_len=%d",
-            self.name,
-            self.model,
-            max_tokens,
-            len(system_prompt),
-            len(user_prompt),
-        )
+        # Pick the right client based on model
+        use_model = model_override or self.model
+        if use_model == os.environ.get("AZURE_OPENAI_DEPLOYMENT_PHI4", "phi-4"):
+            client = self._client_phi4
+        elif use_model == os.environ.get("AZURE_OPENAI_DEPLOYMENT_MINI", "gpt-4o-mini"):
+            client = self._client_mini
+        else:
+            client = self._client_gpt4o
 
-        # Ask the model to respond with structured JSON output
-        response = await self._client.chat.completions.create(
-            model=self.model,
-            temperature=0.2,          # Low temperature for reliable JSON output
-            max_tokens=max_tokens,
+        logger.debug("LLM call | agent=%s | model=%s", self.__class__.__name__, use_model)
+
+        response = await client.chat.completions.create(
+            model=use_model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": user_prompt},
             ],
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
 
-        raw_content: str = response.choices[0].message.content or ""
-        logger.debug("[%s] LLM response received | chars=%d", self.name, len(raw_content))
-        return raw_content
+        content = response.choices[0].message.content
+        logger.debug("LLM response | agent=%s | chars=%d", self.__class__.__name__, len(content))
+        return content
 
     @staticmethod
-    def clean_json(raw: str) -> str:
+    def _parse_json(raw: str) -> dict:
         """
-        Static alias for the module-level clean_json utility.
-
-        Exposed on the class so agents can call self.clean_json() without an import.
+        Safely parse JSON from LLM output.
+        LLMs sometimes wrap JSON in ```json ... ``` markdown — this strips it.
 
         Args:
-            raw: Raw LLM output string, possibly wrapped in markdown fences.
+            raw: Raw string from LLM
 
         Returns:
-            Clean JSON string ready for json.loads().
+            Parsed dict
+
+        Raises:
+            ValueError: If JSON cannot be parsed after cleaning
         """
-        return clean_json(raw)
+        cleaned = raw.strip()
+
+        # Strip markdown code fences if present
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            # Remove first line (```json or ```) and last line (```)
+            cleaned = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
+
+        cleaned = cleaned.strip()
+
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Failed to parse LLM JSON output: {exc}\nRaw: {raw[:200]}") from exc

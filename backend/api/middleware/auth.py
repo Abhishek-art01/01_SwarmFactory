@@ -59,6 +59,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         """
         path = request.url.path
 
+        # Skip auth for CORS preflight (OPTIONS) requests
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         # Skip auth for excluded paths
         for excluded in AUTH_EXCLUDED_PREFIXES:
             if path.startswith(excluded):

@@ -70,3 +70,4 @@ cd frontend && npm run dev
 ## Built with GitHub Copilot
 This project was developed using GitHub Copilot as a coding assistant,
 as permitted by hackathon rules.
+## Prompt : Build a hello world Flask API with one GET endpoint that returns {"message": "hello world"}

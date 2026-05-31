@@ -165,7 +165,7 @@ async def run_parallel_agents(
         logger.info("test_agent starting", extra={"job_id": job_id})
         try:
             # await: LLM API call (test stub generation)
-            test_input = spec.get("architecture", spec)
+            test_input = {"architect": spec.get("architecture", spec), "coder": spec.get("coder_output", spec.get("architecture", spec))}
             result_obj = await with_fallback(
                 test_agent.run, test_input, job_id=job_id
             )

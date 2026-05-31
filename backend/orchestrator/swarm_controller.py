@@ -62,6 +62,13 @@ STAGE_WEIGHTS: dict[str, int] = {
 }
 
 
+def _read_field(value: Any, field: str, default: Any = None) -> Any:
+    """Read a field from either a mapping or an object-like agent output."""
+    if isinstance(value, dict):
+        return value.get(field, default)
+    return getattr(value, field, default)
+
+
 # ── Redis helpers ─────────────────────────────────────────────────────────────
 
 async def _publish_event(redis: aioredis.Redis, job_id: str, event: dict) -> None:
@@ -178,7 +185,7 @@ async def run_swarm(job_id: str, requirement: str, options: dict[str, Any] | Non
             "type": "agent_update",
             "agent": "planner",
             "status": "complete",
-            "output": f"Task graph: {len(task_graph.get('tasks', []))} tasks identified",
+            "output": f"Task graph: {len(_read_field(task_graph, 'tasks', []))} tasks identified",
         })
 
         # ── STAGE 2: Architect ────────────────────────────────────────────────
@@ -207,7 +214,7 @@ async def run_swarm(job_id: str, requirement: str, options: dict[str, Any] | Non
             "type": "agent_update",
             "agent": "architect",
             "status": "complete",
-            "output": f"Architecture: {len(architecture.get('folders', []))} top-level directories",
+            "output": f"Architecture: {len(_read_field(architecture, 'folder_structure', {}))} top-level directories",
         })
 
         # ── STAGE 3: Parallel — coder, test, reviewer ─────────────────────────
@@ -319,7 +326,7 @@ async def run_swarm(job_id: str, requirement: str, options: dict[str, Any] | Non
             "type": "agent_update",
             "agent": "mediator",
             "status": "complete",
-            "output": f"Merged codebase: {len(final_codebase)} files",
+            "output": f"Merged codebase: {len(final_codebase.files)} files",
         })
 
         # ── STAGE 5: DevOps ───────────────────────────────────────────────────
@@ -350,7 +357,7 @@ async def run_swarm(job_id: str, requirement: str, options: dict[str, Any] | Non
                 devops_result = {"github_url": "", "azure_url": ""}
 
         # ── Persist output ────────────────────────────────────────────────────
-        coverage = review_result.get("coverage", 0)
+        coverage = _read_field(review_result, "coverage", _read_field(review_result, "score", 0))
 
         try:
             # await: writing the full codebase JSON to Redis (may be large)
@@ -365,6 +372,9 @@ async def run_swarm(job_id: str, requirement: str, options: dict[str, Any] | Non
                 extra={"job_id": job_id, "error": str(exc)},
             )
 
+        devops_github_url = _read_field(devops_result, "github_url", "")
+        devops_azure_url = _read_field(devops_result, "azure_url", "")
+
         # ── Mark complete ─────────────────────────────────────────────────────
         await _update_job(
             redis,
@@ -372,15 +382,15 @@ async def run_swarm(job_id: str, requirement: str, options: dict[str, Any] | Non
             status="complete",
             current_agent="",
             progress=STAGE_WEIGHTS["complete"],
-            github_url=devops_result.get("github_url", ""),
-            azure_url=devops_result.get("azure_url", ""),
+            github_url=devops_github_url,
+            azure_url=devops_azure_url,
             coverage=str(coverage),
         )
 
         await _publish_event(redis, job_id, {
             "type": "complete",
-            "github_url": devops_result.get("github_url", ""),
-            "azure_url":  devops_result.get("azure_url", ""),
+            "github_url": devops_github_url,
+            "azure_url":  devops_azure_url,
             "coverage":   coverage,
         })
 
@@ -388,7 +398,7 @@ async def run_swarm(job_id: str, requirement: str, options: dict[str, Any] | Non
             "Swarm pipeline complete",
             extra={
                 "job_id": job_id,
-                "files": len(final_codebase),
+                "files": len(final_codebase.files),
                 "coverage": coverage,
             },
         )

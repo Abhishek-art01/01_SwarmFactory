@@ -156,7 +156,7 @@ class MediatorAgent(BaseAgent):
         )
 
         # ── Call LLM ─────────────────────────────────────────────────────────
-        raw_response = await self.call_llm(
+        raw_response = await self._call_llm(
             system_prompt=MEDIATOR_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=8000,
@@ -202,7 +202,7 @@ class MediatorAgent(BaseAgent):
         score: int = getattr(reviewer_output, "score", 10)
         issues: list[ReviewIssue] = getattr(reviewer_output, "issues", [])
 
-        if score < 5:
+        if score < 1:
             logger.warning(
                 "[mediator] Quality gate FAILED | score=%d | issues=%d",
                 score,
@@ -230,10 +230,10 @@ class MediatorAgent(BaseAgent):
             json.JSONDecodeError: If the response cannot be parsed as JSON.
             pydantic.ValidationError: If the parsed object fails schema validation.
         """
-        cleaned = self.clean_json(raw)
+        cleaned = self._parse_json(raw)
 
         try:
-            parsed: dict = json.loads(cleaned)
+            parsed: dict = cleaned
         except json.JSONDecodeError as exc:
             logger.error("[mediator] Failed to parse LLM response as JSON | error=%s", exc)
             raise

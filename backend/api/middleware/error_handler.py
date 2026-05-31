@@ -49,7 +49,16 @@ def register_exception_handlers(app: FastAPI) -> None:
         Returns:
             JSONResponse: Structured error body.
         """
-        logger.warning(
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        is_expected_client_miss = (
+            exc.status_code == 404
+            and request.url.path.startswith("/api/status/")
+            and detail.get("error") == "job_not_found"
+        )
+
+        log_level = logging.INFO if is_expected_client_miss else logging.WARNING
+        logger.log(
+            log_level,
             "HTTP exception",
             extra={
                 "status_code": exc.status_code,

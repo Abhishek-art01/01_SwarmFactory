@@ -23,6 +23,13 @@ STARTING THE WORKER:
 
 import asyncio
 import logging
+import os
+import sys
+
+# Ensure the backend directory is in the Python path
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
 
 from celery import Celery
 
@@ -59,6 +66,9 @@ celery_app.conf.update(
 
     # Store task results for 1 hour
     result_expires=3600,
+
+    # Celery 6 keeps startup broker retry behavior behind this explicit setting.
+    broker_connection_retry_on_startup=True,
 
     # Timezone
     timezone="UTC",
