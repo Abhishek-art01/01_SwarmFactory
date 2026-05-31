@@ -14,7 +14,6 @@ Usage:
 import logging
 import os
 import subprocess
-import tempfile
 from pathlib import Path
 
 from github import Github, GithubException
