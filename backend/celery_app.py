@@ -107,6 +107,12 @@ def run_swarm_task(self, job_id: str, requirement: str, options: dict | None = N
     logger.info("Celery task started", extra={"job_id": job_id})
 
     try:
+        # Ensure backend dir is on path in forked worker processes
+        import sys, os
+        _backend = os.path.dirname(os.path.abspath(__file__))
+        if _backend not in sys.path:
+            sys.path.insert(0, _backend)
+
         # Import here to avoid circular imports at module level
         from orchestrator.swarm_controller import run_swarm
 

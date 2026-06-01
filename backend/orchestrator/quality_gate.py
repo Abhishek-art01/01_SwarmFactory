@@ -24,6 +24,18 @@ MIN_REVIEW_SCORE = 50
 REQUIRED_ENTRYPOINTS = {"main.py", "app.py", "index.py", "server.py", "__init__.py"}
 
 
+def _normalise_review_score(score: Any) -> int:
+    """Return reviewer score on the 0-100 scale used by the quality gate."""
+    try:
+        numeric_score = int(score)
+    except (TypeError, ValueError):
+        return 0
+
+    if 1 <= numeric_score <= 10:
+        return numeric_score * 10
+    return max(0, min(100, numeric_score))
+
+
 def check_quality(
     code_files: dict[str, str],
     review_result: dict[str, Any],
@@ -45,7 +57,7 @@ def check_quality(
     issues: list[str] = []
 
     # ── Check 1: reviewer score ───────────────────────────────────────────────
-    score = review_result.get("score", 0)
+    score = _normalise_review_score(review_result.get("score", 0))
     if score < MIN_REVIEW_SCORE:
         issues.append(f"Review score {score}/100 is below threshold ({MIN_REVIEW_SCORE})")
 

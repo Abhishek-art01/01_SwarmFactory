@@ -1,24 +1,15 @@
 """
 models/model_router.py
 -----------------------
-Routes generation tasks to the correct model based on complexity score.
+Routes generation tasks to the correct Azure OpenAI model based on complexity score.
 
-FULL 8-MODEL FALLBACK CHAIN:
+THREE-MODEL AZURE FALLBACK CHAIN:
+  1. gpt-4o       Complexity 8-10  Best quality
+  2. phi-4        Complexity 4-7   Balanced speed + quality
+  3. gpt-4o-mini  Complexity 1-3   Fast + cheap
 
-  TIER 1 — Azure OpenAI (PRIMARY — Microsoft stack — hackathon mandatory)
-    1. gpt-4o          Complexity 8-10  Best quality
-    2. phi-4           Complexity 4-7   Balanced speed + quality
-    3. gpt-4o-mini     Complexity 1-3   Fast + cheap
-
-  TIER 2 — Free models (fallback when Azure quota exhausted)
-    4. Groq Llama 3.3-70b    Fastest free inference
-    5. Groq Mixtral 8x7b     Strong reasoning
-    6. Google Gemini Flash   Large context (1M tokens)
-    7. Cohere Command-R      Structured JSON specialist
-
-  TIER 3 — Last resort
-    8. Mistral 7B (OpenRouter)  Lightweight, always available
-    9. Cached template          System NEVER crashes
+If all three Azure deployments fail, a cached template is returned so the
+system never crashes. No external/free providers are used.
 
 Usage:
     from models.model_router import ModelRouter
@@ -32,14 +23,10 @@ from typing import Any
 
 from models.azure_openai import AzureOpenAIModel, AzureOpenAIError
 from models.phi4 import Phi4Model, Phi4Error
-from models.free_models import (
-    GroqLlamaModel, GroqMixtralModel, GeminiFlashModel,
-    CohereCommandRModel, MistralOpenRouterModel, FreeModelError
-)
 
 logger = logging.getLogger(__name__)
 
-# Cached template responses — used when ALL 8 models fail
+# Cached template responses — used when all three Azure models fail
 _TEMPLATE_RESPONSES: dict[str, str] = {
     "dockerfile": (
         "FROM python:3.11-slim\n"
@@ -70,12 +57,9 @@ _TEMPLATE_RESPONSES: dict[str, str] = {
 
 class ModelRouter:
     """
-    8-model router with full Azure-primary + free-model fallback chain.
+    Azure-only router with three-model fallback chain.
 
-    Azure models are ALWAYS tried first (hackathon compliance).
-    Free models are fallback only — used when Azure quota is exhausted.
-    This makes the system resilient while keeping Microsoft stack as core.
-
+    All inference goes through Azure OpenAI — no external providers.
     Complexity routing:
       1-3  → gpt-4o-mini  (fast, cheap)
       4-7  → phi-4        (balanced)
@@ -83,15 +67,9 @@ class ModelRouter:
     """
 
     def __init__(self) -> None:
-        # Lazy-init — models created on first use
-        self._gpt4o:   AzureOpenAIModel | None = None
-        self._phi4:    Phi4Model | None         = None
-        self._mini:    AzureOpenAIModel | None  = None
-        self._llama:   GroqLlamaModel | None    = None
-        self._mixtral: GroqMixtralModel | None  = None
-        self._gemini:  GeminiFlashModel | None  = None
-        self._cohere:  CohereCommandRModel | None = None
-        self._mistral: MistralOpenRouterModel | None = None
+        self._gpt4o: AzureOpenAIModel | None = None
+        self._phi4:  Phi4Model | None         = None
+        self._mini:  AzureOpenAIModel | None  = None
 
     def complete(
         self,
@@ -101,84 +79,45 @@ class ModelRouter:
         template_key: str = "default",
     ) -> str:
         """
-        Route to best model for this complexity. Fall back through chain on failure.
-
-        Args:
-            system_prompt: System instruction for the LLM.
-            user_prompt:   User message / task.
-            complexity:    1-10 task difficulty score.
-            template_key:  Key for cached fallback ("dockerfile", "ci", "default").
-
-        Returns:
-            Generated text string from whichever model succeeded.
+        Route to the best Azure model for this complexity.
+        Falls back through the three-model chain on failure.
         """
-        complexity  = max(1, min(10, complexity))
-        chain       = self._build_full_chain(complexity)
+        complexity = max(1, min(10, complexity))
+        chain      = self._build_chain(complexity)
 
         for model_name, call in chain:
             try:
                 logger.info("Trying model | model=%s | complexity=%d", model_name, complexity)
                 result = call(system_prompt, user_prompt)
                 logger.info("Model succeeded | model=%s", model_name)
-
-                # Log which tier was used for observability
-                tier = self._get_tier(model_name)
-                if tier > 1:
-                    logger.warning(
-                        "Azure quota exhausted — used free model fallback | "
-                        "model=%s | tier=%d", model_name, tier
-                    )
                 return result
-
-            except (AzureOpenAIError, Phi4Error, FreeModelError, Exception) as exc:
+            except (AzureOpenAIError, Phi4Error, Exception) as exc:
                 logger.warning("Model failed | model=%s | error=%s", model_name, str(exc)[:100])
                 continue
 
-        # All 8 models failed — return cached template (never crash)
-        logger.error("All 8 models failed — returning cached template | key=%s", template_key)
+        logger.error("All Azure models failed — returning cached template | key=%s", template_key)
         return _TEMPLATE_RESPONSES.get(template_key, _TEMPLATE_RESPONSES["default"])
 
-    def _build_full_chain(self, complexity: int) -> list[tuple[str, Any]]:
-        """
-        Build ordered list of (model_name, callable) for given complexity.
-
-        Azure models come first in every chain (hackathon requirement).
-        Free models follow in order of speed/quality.
-        """
-        # Azure tier (always first — Microsoft stack mandatory)
+    def _build_chain(self, complexity: int) -> list[tuple[str, Any]]:
+        """Build ordered (model_name, callable) list for the given complexity."""
         if complexity <= 3:
-            azure_chain = [
+            return [
                 ("gpt-4o-mini [Azure]", self._get_mini().complete),
                 ("phi-4 [Azure]",       self._get_phi4().complete),
                 ("gpt-4o [Azure]",      self._get_gpt4o().complete),
             ]
         elif complexity <= 7:
-            azure_chain = [
+            return [
                 ("phi-4 [Azure]",       self._get_phi4().complete),
                 ("gpt-4o-mini [Azure]", self._get_mini().complete),
                 ("gpt-4o [Azure]",      self._get_gpt4o().complete),
             ]
         else:
-            azure_chain = [
+            return [
                 ("gpt-4o [Azure]",      self._get_gpt4o().complete),
                 ("phi-4 [Azure]",       self._get_phi4().complete),
                 ("gpt-4o-mini [Azure]", self._get_mini().complete),
             ]
-
-        # Free tier fallback (used only if Azure exhausted)
-        free_chain = [
-            ("Groq Llama-3.3-70b [Free]",  self._get_llama().complete),
-            ("Groq Mixtral-8x7b [Free]",   self._get_mixtral().complete),
-            ("Gemini 1.5 Flash [Free]",    self._get_gemini().complete),
-            ("Cohere Command-R [Free]",    self._get_cohere().complete),
-            ("Mistral-7B OpenRouter [Free]", self._get_mistral().complete),
-        ]
-
-        return azure_chain + free_chain
-
-    @staticmethod
-    def _get_tier(model_name: str) -> int:
-        return 1 if "[Azure]" in model_name else 2
 
     # ── Lazy getters ──────────────────────────────────────────────────────────
 
@@ -199,23 +138,3 @@ class ModelRouter:
                 fallback_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT_MINI"],
             )
         return self._mini
-
-    def _get_llama(self) -> GroqLlamaModel:
-        if self._llama is None: self._llama = GroqLlamaModel()
-        return self._llama
-
-    def _get_mixtral(self) -> GroqMixtralModel:
-        if self._mixtral is None: self._mixtral = GroqMixtralModel()
-        return self._mixtral
-
-    def _get_gemini(self) -> GeminiFlashModel:
-        if self._gemini is None: self._gemini = GeminiFlashModel()
-        return self._gemini
-
-    def _get_cohere(self) -> CohereCommandRModel:
-        if self._cohere is None: self._cohere = CohereCommandRModel()
-        return self._cohere
-
-    def _get_mistral(self) -> MistralOpenRouterModel:
-        if self._mistral is None: self._mistral = MistralOpenRouterModel()
-        return self._mistral

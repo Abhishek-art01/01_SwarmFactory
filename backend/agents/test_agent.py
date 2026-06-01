@@ -76,7 +76,7 @@ class TestAgent(BaseAgent):
         """Initialise base class (sets up Azure OpenAI client)."""
         super().__init__()
 
-    async def run(self, input_data: Any) -> TestOutput:
+    async def run(self, input_data: Any, **kwargs: Any) -> TestOutput:
         """
         Execute the test agent on the pipeline output.
 
@@ -124,6 +124,7 @@ class TestAgent(BaseAgent):
             system_prompt=TEST_WRITER_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=8000,
+            model_override=kwargs.get("model", ""),
         )
 
         # ---- Parse response ------------------------------------------------

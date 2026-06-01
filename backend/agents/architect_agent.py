@@ -92,7 +92,7 @@ class ArchitectAgent(BaseAgent):
         super().__init__()
         self._user_builder = PromptBuilder(template=ARCHITECT_USER_TEMPLATE)
 
-    async def run(self, input_data: Any) -> ArchitectOutput:
+    async def run(self, input_data: Any, **kwargs: Any) -> ArchitectOutput:
         """
         Execute the architect agent on a PlannerOutput (or compatible dict/JSON string).
 
@@ -133,6 +133,7 @@ class ArchitectAgent(BaseAgent):
             system_prompt=ARCHITECT_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=3000,   # Architect needs more room: folder tree + contracts + deps
+            model_override=kwargs.get("model", ""),
         )
 
         # Strip any markdown code fences the model may have wrapped the JSON in

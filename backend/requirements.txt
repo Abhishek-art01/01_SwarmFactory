@@ -23,6 +23,8 @@ httpx>=0.28.1        # HTTP client (ag2 requires >=0.28.1)
 # ── DevOps tools ───────────────────────────────────────────────
 PyGithub==2.3.0
 docker==7.1.0
+azure-identity==1.17.1
+azure-mgmt-containerinstance==10.1.0
 requests==2.32.3
 gitpython==3.1.43
 

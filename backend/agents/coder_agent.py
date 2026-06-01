@@ -77,7 +77,7 @@ class CoderAgent(BaseAgent):
         """Initialise base class (sets up Azure OpenAI client)."""
         super().__init__()
 
-    async def run(self, input_data: Any) -> CoderOutput:
+    async def run(self, input_data: Any, **kwargs: Any) -> CoderOutput:
         """
         Execute the coder agent on an ArchitectOutput (or compatible input).
 
@@ -119,6 +119,7 @@ class CoderAgent(BaseAgent):
             system_prompt=CODER_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=8000,
+            model_override=kwargs.get("model", ""),
         )
 
         # ---- Parse response ------------------------------------------------

@@ -72,7 +72,22 @@ az cognitiveservices account deployment create \
 
 success "gpt-4o deployed"
 
-# ── 4. Deploy GPT-4o-mini ─────────────────────────────────────────────────────
+# ── 4. Deploy Phi-4 ──────────────────────────────────────────────────────────
+info "Deploying phi-4 model..."
+az cognitiveservices account deployment create \
+    --name "$OPENAI_RESOURCE" \
+    --resource-group "$RESOURCE_GROUP" \
+    --deployment-name "phi-4" \
+    --model-name "phi-4" \
+    --model-version "1" \
+    --model-format OpenAI \
+    --sku-capacity 10 \
+    --sku-name Standard \
+    --output none 2>/dev/null || warn "phi-4 deployment may already exist"
+
+success "phi-4 deployed"
+
+# ── 5. Deploy GPT-4o-mini ─────────────────────────────────────────────────────
 info "Deploying gpt-4o-mini model..."
 az cognitiveservices account deployment create \
     --name "$OPENAI_RESOURCE" \
@@ -87,7 +102,7 @@ az cognitiveservices account deployment create \
 
 success "gpt-4o-mini deployed"
 
-# ── 5. Get OpenAI Endpoint + Key ──────────────────────────────────────────────
+# ── 6. Get OpenAI Endpoint + Key ──────────────────────────────────────────────
 info "Fetching Azure OpenAI credentials..."
 OPENAI_ENDPOINT=$(az cognitiveservices account show \
     --name "$OPENAI_RESOURCE" \
@@ -101,7 +116,7 @@ OPENAI_KEY=$(az cognitiveservices account keys list \
 
 success "OpenAI endpoint: $OPENAI_ENDPOINT"
 
-# ── 6. Azure AI Search ────────────────────────────────────────────────────────
+# ── 7. Azure AI Search ────────────────────────────────────────────────────────
 info "Creating Azure AI Search: $SEARCH_RESOURCE..."
 az search service create \
     --name "$SEARCH_RESOURCE" \
@@ -118,7 +133,7 @@ SEARCH_KEY=$(az search admin-key show \
 
 success "Azure AI Search ready: $SEARCH_ENDPOINT"
 
-# ── 7. Azure Container Registry ───────────────────────────────────────────────
+# ── 8. Azure Container Registry ───────────────────────────────────────────────
 info "Creating Azure Container Registry: $ACR_NAME..."
 az acr create \
     --name "$ACR_NAME" \
@@ -134,7 +149,7 @@ ACR_LOGIN_SERVER=$(az acr show \
 
 success "ACR ready: $ACR_LOGIN_SERVER"
 
-# ── 8. Container Apps Environment ────────────────────────────────────────────
+# ── 9. Container Apps Environment ────────────────────────────────────────────
 info "Creating Container Apps environment: $CONTAINER_ENV..."
 az containerapp env create \
     --name "$CONTAINER_ENV" \
@@ -144,7 +159,7 @@ az containerapp env create \
 
 success "Container Apps environment ready"
 
-# ── 9. Write .env file ────────────────────────────────────────────────────────
+# ── 10. Write .env file ───────────────────────────────────────────────────────
 ENV_FILE=".env"
 info "Writing credentials to $ENV_FILE..."
 
@@ -198,7 +213,7 @@ ENVEOF
 
 success ".env file written"
 
-# ── 10. Summary ───────────────────────────────────────────────────────────────
+# ── 11. Summary ───────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}============================================================${NC}"
 echo -e "${GREEN}  Azure setup complete!${NC}"

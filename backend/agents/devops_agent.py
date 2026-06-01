@@ -86,7 +86,7 @@ class DevOpsAgent:
         self.dry_run = dry_run
         self.router = router or ModelRouter()
 
-    async def run(self, codebase: dict[str, Any]) -> DeployOutput:
+    async def run(self, codebase: dict[str, Any], **kwargs: Any) -> DeployOutput:
         """
         Run the full DevOps pipeline for a generated codebase.
 

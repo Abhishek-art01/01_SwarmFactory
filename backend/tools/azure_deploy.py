@@ -13,22 +13,6 @@ Usage:
 import logging
 import os
 import subprocess
-import time
-
-from azure.identity import DefaultAzureCredential
-from azure.mgmt.containerinstance import ContainerInstanceManagementClient
-from azure.mgmt.containerinstance.models import (
-    ContainerGroup,
-    Container,
-    ContainerPort,
-    ResourceRequests,
-    ResourceRequirements,
-    ImageRegistryCredential,
-    IpAddress,
-    OperatingSystemTypes,
-    ContainerGroupRestartPolicy,
-)
-from azure.core.exceptions import AzureError
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +91,21 @@ def _deploy_via_sdk(image_uri: str, app_name: str, resource_group: str) -> str:
     registry_password = os.environ.get("AZURE_REGISTRY_PASSWORD", "")
 
     try:
+        from azure.core.exceptions import AzureError
+        from azure.identity import DefaultAzureCredential
+        from azure.mgmt.containerinstance import ContainerInstanceManagementClient
+        from azure.mgmt.containerinstance.models import (
+            Container,
+            ContainerGroup,
+            ContainerGroupRestartPolicy,
+            ContainerPort,
+            ImageRegistryCredential,
+            IpAddress,
+            OperatingSystemTypes,
+            ResourceRequests,
+            ResourceRequirements,
+        )
+
         credential = DefaultAzureCredential()
         client = ContainerInstanceManagementClient(credential, subscription_id)
 
@@ -161,6 +160,8 @@ def _deploy_via_sdk(image_uri: str, app_name: str, resource_group: str) -> str:
 
     except AzureDeployError:
         raise
+    except ImportError as exc:
+        raise RuntimeError(f"Azure SDK packages are not installed: {exc}") from exc
     except AzureError as exc:
         raise AzureDeployError(f"Azure SDK error: {exc}") from exc
 

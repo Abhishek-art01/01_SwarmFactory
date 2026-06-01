@@ -56,7 +56,7 @@ graph TD
 
 ## 🚀 Quick Start (Local Development)
 
-You can run Swarm Factory locally using either **Azure OpenAI** or **free alternative models** (Google Gemini, Groq, etc.) while waiting for Azure quotas.
+You can run Swarm Factory locally using **Azure OpenAI**.
 
 ### 1. Prerequisites
 Ensure you have the following installed:
@@ -81,23 +81,16 @@ cd frontend && npm install && cd ..
 ```
 
 ### 3. Configure the Environment (`.env`)
-Open the newly created `.env` file and choose your LLM provider.
+Open the newly created `.env` file and fill in your Azure credentials.
+The stack runs exclusively on Azure OpenAI — no other providers are used.
 
-#### Option A: Zero-Azure / Free Mode (No Azure Quota Required)
-Perfect for instant testing. Uses Google Gemini and Groq:
 ```env
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=your-key-from-aistudio.google.com
-GROQ_API_KEY=your-key-from-console.groq.com
-```
-
-#### Option B: Azure OpenAI Mode
-Fill in your Azure OpenAI endpoint and keys:
-```env
-LLM_PROVIDER=azure
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
 AZURE_OPENAI_API_KEY=your-azure-openai-key-here
 AZURE_OPENAI_API_VERSION=2024-02-01
+AZURE_OPENAI_DEPLOYMENT_GPT4O=gpt-4o
+AZURE_OPENAI_DEPLOYMENT_PHI4=phi-4
+AZURE_OPENAI_DEPLOYMENT_MINI=gpt-4o-mini
 ```
 
 ### 4. Start Local Services
@@ -123,6 +116,28 @@ cd frontend && npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) to view the Swarm Factory Dashboard.
+
+### Frontend Vite dev proxy (local development)
+
+The frontend uses Vite's dev proxy to forward /api and /ws to the backend on the same origin. For local/Codespace development leave the following variables empty so the frontend automatically proxies requests to the running backend (localhost:8000).
+
+```env
+VITE_API_BASE_URL=
+VITE_API_URL=
+VITE_WS_BASE_URL=
+VITE_WS_URL=
+VITE_API_KEY=swarm-factory-dev-key
+```
+
+The empty values tell Vite to proxy /api and /ws requests to the same origin — meaning the frontend automatically hits localhost:8000 without hardcoding any host. This is the correct setup for local/Codespace dev.
+
+What each variable means — fill only if deploying to production:
+
+- VITE_API_BASE_URL: Base URL for REST calls (/api/generate etc.) — Fill when deploying frontend separately from backend
+- VITE_API_URL: Alias for the above — Same as above
+- VITE_WS_BASE_URL: Base URL for WebSocket (/ws/job_id) — Fill when deploying to Azure; use wss://your-app.azurecontainerapps.io
+- VITE_WS_URL: Alias for the above — Same as above
+- VITE_API_KEY: Sent as X-API-Key header on every request — Always; must match backend API_KEY in root .env
 
 ---
 
@@ -203,4 +218,3 @@ This script:
 This project was developed using **GitHub Copilot** as an AI coding assistant, in compliance with the hackathon rules.
 
 For a detailed walkthrough of the internal components and data schemas, please refer to [ARCHITECTURE.md](file:///workspaces/01_SwarmFactory/ARCHITECTURE.md).
-

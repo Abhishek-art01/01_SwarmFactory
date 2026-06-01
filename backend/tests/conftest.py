@@ -12,8 +12,7 @@ os.environ.setdefault("REDIS_URL",   "redis://localhost:6379/0")
 os.environ.setdefault("API_KEY",     "test-api-key")
 os.environ.setdefault("SECRET_KEY",  "test-secret-key-32-chars-minimum!!")
 os.environ.setdefault("APP_ENV",     "development")
-os.environ.setdefault("LLM_PROVIDER","gemini")
-os.environ.setdefault("GEMINI_API_KEY", "test-gemini-key")
+os.environ.setdefault("LLM_PROVIDER", "azure")
 os.environ.setdefault("SESSION_STORE_PATH", str(Path(tempfile.gettempdir()) / "sf_test_sessions"))
 
 @pytest.fixture

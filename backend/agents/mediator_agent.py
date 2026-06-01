@@ -115,7 +115,7 @@ class MediatorAgent(BaseAgent):
         """Initialise base class (sets up Azure OpenAI async client)."""
         super().__init__()
 
-    async def run(self, all_outputs: dict[str, Any]) -> FinalCodebase:
+    async def run(self, all_outputs: dict[str, Any], **kwargs: Any) -> FinalCodebase:
         """
         Execute the mediator agent on all pipeline outputs.
 
@@ -160,6 +160,7 @@ class MediatorAgent(BaseAgent):
             system_prompt=MEDIATOR_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=8000,
+            model_override=kwargs.get("model", ""),
         )
 
         # ── Parse & validate ──────────────────────────────────────────────────

@@ -98,7 +98,7 @@ class ReviewerAgent(BaseAgent):
         """Initialise base class (sets up Azure OpenAI async client)."""
         super().__init__()
 
-    async def run(self, input_data: Any) -> ReviewOutput:
+    async def run(self, input_data: Any, **kwargs: Any) -> ReviewOutput:
         """
         Execute the reviewer agent on a CoderOutput or compatible dict.
 
@@ -156,6 +156,7 @@ class ReviewerAgent(BaseAgent):
             system_prompt=REVIEWER_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=3000,
+            model_override=kwargs.get("model", ""),
         )
 
         # ── Parse & validate response ────────────────────────────────────────

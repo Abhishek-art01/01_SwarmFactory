@@ -89,7 +89,7 @@ class PlannerAgent(BaseAgent):
         super().__init__()
         self._user_builder = PromptBuilder(template=PLANNER_USER_TEMPLATE)
 
-    async def run(self, input_data: Any) -> PlannerOutput:
+    async def run(self, input_data: Any, **kwargs: Any) -> PlannerOutput:
         """
         Execute the planner agent on a plain-English requirement string.
 
@@ -120,6 +120,7 @@ class PlannerAgent(BaseAgent):
             system_prompt=PLANNER_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=2000,
+            model_override=kwargs.get("model", ""),
         )
 
         # Strip any markdown code fences the model may have wrapped the JSON in

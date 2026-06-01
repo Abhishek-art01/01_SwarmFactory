@@ -1,22 +1,12 @@
 """
 orchestrator/parallel_runner.py
 --------------------------------
-Fan-out executor: runs coder_agent, test_agent, and reviewer_agent concurrently
-using asyncio.gather().
+Runs the coder, test, and reviewer agents for the middle pipeline stage.
 
-WHY RUN THESE THREE IN PARALLEL?
-  - coder_agent,  test_agent, and reviewer_agent all operate on the same
-    architecture spec and task graph, but produce INDEPENDENT outputs.
-  - Running them sequentially would waste wall-clock time because each
-    involves one or more LLM API calls (network-bound, not CPU-bound).
-  - asyncio.gather() lets all three LLM calls be in-flight simultaneously
-    within the SAME OS thread, using the event loop's I/O multiplexer.
-  - Expected speedup: ~3× vs sequential (depends on LLM latency variance).
-
-IMPORTANT CONSTRAINT:
-  test_agent at this stage generates test STUBS based on the architecture,
-  not tests against actual code. The mediator_agent will later reconcile
-  the stubs with the real code output from coder_agent.
+The coder agent is required and runs first because both downstream agents
+expect CoderOutput-compatible input. Once code exists, test_agent and
+reviewer_agent are fanned out with asyncio.gather() because their LLM calls are
+independent, network-bound work.
 """
 
 import asyncio
@@ -112,7 +102,7 @@ async def run_parallel_agents(
 
     # ── Define per-agent coroutines ───────────────────────────────────────────
 
-    async def run_coder() -> dict[str, str]:
+    async def run_coder() -> Any:
         """
         Call coder_agent and return generated code files.
 
@@ -127,11 +117,16 @@ async def run_parallel_agents(
             result_obj = await with_fallback(
                 coder_agent.run, coder_input, job_id=job_id
             )
-            # CoderAgent returns CoderOutput (Pydantic model) — extract files dict
-            result: dict[str, str] = result_obj.files if hasattr(result_obj, "files") else result_obj
+            # CoderAgent returns CoderOutput (Pydantic model). Keep the full
+            # object so downstream agents receive files plus metadata.
+            files: dict[str, str]
+            if hasattr(result_obj, "files"):
+                files = result_obj.files
+            else:
+                files = result_obj.get("files", result_obj)
             logger.info(
                 "coder_agent complete",
-                extra={"job_id": job_id, "files_generated": len(result)},
+                extra={"job_id": job_id, "files_generated": len(files)},
             )
 
             # Publish progress event so the WebSocket client sees live updates
@@ -141,17 +136,17 @@ async def run_parallel_agents(
                     "type": "agent_update",
                     "agent": "coder",
                     "status": "complete",
-                    "output": f"Generated {len(result)} files",
+                    "output": f"Generated {len(files)} files",
                 })
             except Exception:
                 pass  # Non-fatal
 
-            return result
+            return result_obj
         except Exception as exc:
             logger.error("coder_agent failed", extra={"job_id": job_id, "error": str(exc)})
             raise  # REQUIRED agent — re-raise to fail the job
 
-    async def run_test() -> dict[str, str]:
+    async def run_test(coder_payload: dict[str, Any]) -> dict[str, str]:
         """
         Call test_agent and return generated test files.
 
@@ -165,12 +160,19 @@ async def run_parallel_agents(
         logger.info("test_agent starting", extra={"job_id": job_id})
         try:
             # await: LLM API call (test stub generation)
-            test_input = {"architect": spec.get("architecture", spec), "coder": spec.get("coder_output", spec.get("architecture", spec))}
+            test_input = {
+                "architect": spec.get("architecture", spec),
+                "coder": coder_payload,
+            }
             result_obj = await with_fallback(
                 test_agent.run, test_input, job_id=job_id
             )
             # TestAgent returns TestOutput — extract test_files dict
-            result: dict[str, str] = result_obj.test_files if hasattr(result_obj, "test_files") else result_obj
+            result: dict[str, str]
+            if hasattr(result_obj, "test_files"):
+                result = result_obj.test_files
+            else:
+                result = result_obj
             logger.info(
                 "test_agent complete",
                 extra={"job_id": job_id, "test_files": len(result)},
@@ -195,7 +197,7 @@ async def run_parallel_agents(
             )
             return {}  # Non-required — return empty dict
 
-    async def run_reviewer() -> dict[str, Any]:
+    async def run_reviewer(coder_payload: dict[str, Any]) -> dict[str, Any]:
         """
         Call reviewer_agent and return the code review result.
 
@@ -204,14 +206,18 @@ async def run_parallel_agents(
         """
         logger.info("reviewer_agent starting", extra={"job_id": job_id})
         try:
-            # ReviewerAgent needs CoderOutput-compatible input
-            reviewer_input = spec.get("architecture", spec)
+            # ReviewerAgent needs CoderOutput-compatible input.
+            reviewer_input = coder_payload
             # await: LLM API call (code review)
             result_obj = await with_fallback(
                 reviewer_agent.run, reviewer_input, job_id=job_id
             )
             # ReviewerAgent returns ReviewOutput model
-            result: dict[str, Any] = result_obj.model_dump() if hasattr(result_obj, "model_dump") else result_obj
+            result: dict[str, Any]
+            if hasattr(result_obj, "model_dump"):
+                result = result_obj.model_dump()
+            else:
+                result = result_obj
             score = result.get("score", 0)
             issues = result.get("issues", [])
             logger.info(
@@ -246,40 +252,40 @@ async def run_parallel_agents(
             "type": "agent_update",
             "agent": "coder+test+reviewer",
             "status": "running",
-            "output": "Running coder, test, and reviewer agents in parallel...",
+            "output": "Generating code, then running test and reviewer agents...",
         })
     except Exception:
         pass
 
-    # ── Fan-out: all three coroutines run concurrently ────────────────────────
-    # asyncio.gather() schedules run_coder, run_test, and run_reviewer
-    # on the event loop simultaneously.
-    #
-    # HOW THE EVENT LOOP HANDLES THIS:
-    #   1. run_coder sends HTTP request to Azure OpenAI → suspends on await
-    #   2. Event loop switches to run_test → sends its HTTP request → suspends
-    #   3. Event loop switches to run_reviewer → sends its HTTP request → suspends
-    #   4. When Azure OpenAI responds to any of them, that coroutine resumes
-    #   5. All three complete in roughly max(t_coder, t_test, t_reviewer) time
-    #      instead of t_coder + t_test + t_reviewer
-    #
-    # return_exceptions=True means if run_test or run_reviewer raise an
-    # exception, it becomes the return value for that position (we handle it
-    # below) rather than cancelling the other tasks.
+    # ── Generate code first, then fan out dependent agents ───────────────────
+    # test_agent and reviewer_agent both expect CoderOutput-compatible input.
+    # Running them against the architecture alone produces empty reviews and
+    # validation failures, so only those two remain parallel.
+    coder_result = await run_coder()
+
+    if hasattr(coder_result, "model_dump"):
+        coder_payload: dict[str, Any] = coder_result.model_dump()
+    elif isinstance(coder_result, dict) and "files" in coder_result:
+        coder_payload = coder_result
+    else:
+        coder_payload = {
+            "files": coder_result,
+            "dependencies": [],
+            "entry_point": "main.py",
+            "start_command": "",
+        }
+
+    code_files: dict[str, str] = coder_payload.get("files", {})
+
     results = await asyncio.gather(
-        run_coder(),
-        run_test(),
-        run_reviewer(),
+        run_test(coder_payload),
+        run_reviewer(coder_payload),
         return_exceptions=True,
     )
 
-    coder_result, test_result, reviewer_result = results
+    test_result, reviewer_result = results
 
     # ── Handle results ────────────────────────────────────────────────────────
-
-    # coder_agent is REQUIRED — if it raised, propagate the exception
-    if isinstance(coder_result, BaseException):
-        raise RuntimeError(f"coder_agent failed: {coder_result}") from coder_result
 
     # test_agent / reviewer_agent are OPTIONAL — use defaults on failure
     if isinstance(test_result, BaseException):
@@ -300,14 +306,14 @@ async def run_parallel_agents(
         "Parallel agent stage complete",
         extra={
             "job_id": job_id,
-            "code_files": len(coder_result),
+            "code_files": len(code_files),
             "test_files": len(test_result),
             "review_score": reviewer_result.get("score"),
         },
     )
 
     return {
-        "code_files":    coder_result,
+        "code_files":    code_files,
         "test_files":    test_result,
         "review_result": reviewer_result,
     }

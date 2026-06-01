@@ -15,7 +15,7 @@ import { useState, useRef, KeyboardEvent } from "react";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface SwarmOptions {
-  model: "gpt-4o" | "gpt-4-turbo" | "claude-3-opus";
+  model: "gpt-4o" | "phi-4" | "gpt-4o-mini";
   maxAgents: number;
   includeTests: boolean;
   includeDocs: boolean;
@@ -67,8 +67,8 @@ function OptionsPanel({
           className="bg-black/60 border border-cyan-800/50 text-cyan-200 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:border-cyan-500 disabled:opacity-40"
         >
           <option value="gpt-4o">GPT-4o</option>
-          <option value="gpt-4-turbo">GPT-4 Turbo</option>
-          <option value="claude-3-opus">Claude 3 Opus</option>
+          <option value="phi-4">Phi-4</option>
+          <option value="gpt-4o-mini">GPT-4o-mini</option>
         </select>
       </label>
 
