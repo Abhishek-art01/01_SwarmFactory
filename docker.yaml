@@ -29,6 +29,10 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_KEY: swarm-factory-dev-key
+    environment:
+      - VITE_API_KEY=swarm-factory-dev-key
     ports:
       - "8080:80"
     depends_on:
