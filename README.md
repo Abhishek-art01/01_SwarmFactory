@@ -157,7 +157,33 @@ Notes:
 - If any Dockerfile paths differ, update the -f / build.context paths accordingly.
 - This runs the app locally for development/testing. For production, use the existing infra/deploy scripts to push to ACR and deploy to Azure Container Apps.
 
+› how to get live logs from docker
 
+
+• Use Docker Compose logs:
+
+  docker compose -f docker.yaml logs -f
+
+  For one service:
+
+  docker compose -f docker.yaml logs -f backend
+  docker compose -f docker.yaml logs -f frontend
+  docker compose -f docker.yaml logs -f redis
+
+  Show only recent logs, then follow live:
+
+  docker compose -f docker.yaml logs --tail 100 -f backend
+
+  If you run the root compose file instead of docker.yaml, drop -f docker.yaml:
+
+  docker compose logs -f
+  docker compose logs -f api
+  docker compose logs -f celery
+  docker compose logs -f frontend
+
+  For a specific container:
+
+  docker logs -f 01_swarmfactory-backend-1
 
 ### Frontend Vite dev proxy (local development)
 
