@@ -10,6 +10,7 @@ services:
       - "8000:8000"
     environment:
       - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/backend
     restart: unless-stopped
 
   frontend:
