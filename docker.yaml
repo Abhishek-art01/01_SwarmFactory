@@ -1,8 +1,7 @@
 services:
   redis:
     image: redis:alpine
-    ports:
-      - "6379:6379"
+    # no host port published by default; accessible by other services via 'redis:6379'
     restart: unless-stopped
 
   backend:
