@@ -165,7 +165,12 @@ def _validate_job_id(job_id: str) -> str | None:
 
 
 def _authenticate(websocket: WebSocket) -> tuple[bool, str | None, str | None]:
-    token = websocket.query_params.get("api_key") or websocket.query_params.get("token")
+    # Accept API key from either query params (api_key or token) or X-API-Key header
+    token = (
+        websocket.headers.get("x-api-key")
+        or websocket.query_params.get("api_key")
+        or websocket.query_params.get("token")
+    )
     if not token:
         return False, None, "Missing WebSocket API key"
     if token != settings.API_KEY:
