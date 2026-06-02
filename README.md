@@ -218,3 +218,76 @@ This script:
 This project was developed using **GitHub Copilot** as an AI coding assistant, in compliance with the hackathon rules.
 
 For a detailed walkthrough of the internal components and data schemas, please refer to [ARCHITECTURE.md](file:///workspaces/01_SwarmFactory/ARCHITECTURE.md).
+
+## 🐳 Running with Docker
+
+Run the project with Docker locally. Ensure .env is configured (copy .env.example -> .env) before starting.
+
+1) Build images
+
+```bash
+# Backend (from repo root)
+docker build -f backend/Dockerfile -t swarm-factory-backend:latest ./backend
+
+# Frontend (if Dockerfile exists in frontend)
+docker build -f frontend/Dockerfile -t swarm-factory-frontend:latest ./frontend
+
+# (Optional) infra image used for production builds
+# docker build -f infra/Dockerfile -t swarm-factory-infra:latest ./infra
+```
+
+2) Run required services and app containers
+
+```bash
+# Create a network
+docker network create swarm-net || true
+
+# Run Redis
+docker run -d --name redis --network swarm-net -p 6379:6379 redis:alpine
+
+# Run backend (exposes API on :8000)
+docker run -d --name swarm-backend --network swarm-net --env-file .env -p 8000:8000 swarm-factory-backend:latest
+
+# Run frontend (exposes UI on :3000)
+docker run -d --name swarm-frontend --network swarm-net -p 3000:3000 swarm-factory-frontend:latest
+```
+
+Open http://localhost:3000 and verify the backend is reachable at http://localhost:8000.
+
+3) Optional: docker-compose example
+
+Create a docker-compose.yml in repo root and run `docker compose up --build`:
+
+```yaml
+version: "3.8"
+services:
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+networks:
+  default:
+    name: swarm-net
+```
+
+Notes:
+- If any Dockerfile paths differ, update the -f / build.context paths accordingly.
+- This runs the app locally for development/testing. For production, use the existing infra/deploy scripts to push to ACR and deploy to Azure Container Apps.
+
