@@ -119,36 +119,30 @@ Open [http://localhost:3000](http://localhost:3000) to view the Swarm Factory Da
 
 ## 🐳 Running with Docker
 
-Run the project with Docker locally. Ensure .env is configured (copy .env.example -> .env) before starting.
+Ensure .env is configured (cp .env.example .env).
 
-1) Build images
+Build backend image from the repo root:
 
 ```bash
-# Backend (from repo root)
 docker build -f infra/Dockerfile -t swarm-factory-backend:latest .
-
-# Frontend (if Dockerfile exists in frontend)
-docker build -f frontend/Dockerfile -t swarm-factory-frontend:latest ./frontend
-
-# (Optional) infra image used for production builds
-# docker build -f infra/Dockerfile -t swarm-factory-infra:latest ./infra
 ```
 
-2) Run required services and app containers
+Run the app (creates network, Redis, backend):
 
 ```bash
-# Create a network
 docker network create swarm-net || true
-
-# Run Redis
 docker run -d --name redis --network swarm-net -p 6379:6379 redis:alpine
-
-# Run backend (exposes API on :8000)
 docker run -d --name swarm-backend --network swarm-net --env-file .env -p 8000:8000 swarm-factory-backend:latest
+```
 
-# Run frontend (exposes UI on :3000)
+If a frontend Dockerfile exists, build and run it:
+
+```bash
+docker build -f frontend/Dockerfile -t swarm-factory-frontend:latest ./frontend
 docker run -d --name swarm-frontend --network swarm-net -p 3000:3000 swarm-factory-frontend:latest
 ```
+
+Open http://localhost:3000 (frontend) and http://localhost:8000 (backend).
 
 Open http://localhost:3000 and verify the backend is reachable at http://localhost:8000.
 
