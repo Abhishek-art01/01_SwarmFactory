@@ -1,16 +1,29 @@
-version: '3.8'
-
 services:
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
   backend:
     build:
       context: .
       dockerfile: infra/Dockerfile
       target: production
+    env_file: .env
     ports:
       - "8000:8000"
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app/backend
+      # Fallback development defaults (override via .env)
+      - REDIS_URL=redis://redis:6379/0
+      - API_KEY=swarm-factory-dev-key
+      - SECRET_KEY=dev-secret
+      - AZURE_OPENAI_ENDPOINT=https://example.invalid
+      - AZURE_OPENAI_API_KEY=dev-key
+    depends_on:
+      - redis
     restart: unless-stopped
 
   frontend:
