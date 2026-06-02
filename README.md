@@ -138,7 +138,7 @@ docker run -d --name swarm-backend --network swarm-net --env-file .env -p 8000:8
 If a frontend Dockerfile exists, build and run it:
 
 ```bash
-docker build -f frontend/Dockerfile -t swarm-factory-frontend:latest ./frontend
+docker compose -f docker.yaml up --build  # starts frontend+backend (frontend -> http://localhost:8080, backend -> http://localhost:8000)
 docker run -d --name swarm-frontend --network swarm-net -p 3000:3000 swarm-factory-frontend:latest
 ```
 
