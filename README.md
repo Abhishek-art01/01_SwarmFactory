@@ -119,65 +119,39 @@ Open [http://localhost:3000](http://localhost:3000) to view the Swarm Factory Da
 
 ## 🐳 Running with Docker
 
-Ensure .env is configured (cp .env.example .env).
-
-Build backend image from the repo root:
+Ensure .env is configured:
 
 ```bash
-docker build -f infra/Dockerfile -t swarm-factory-backend:latest .
+cp .env.example .env
 ```
 
-Run the app (creates network, Redis, backend):
+Start required services and the backend:
 
 ```bash
+# create network and start Redis
 docker network create swarm-net || true
 docker run -d --name redis --network swarm-net -p 6379:6379 redis:alpine
+
+# build and run backend
+docker build -f infra/Dockerfile -t swarm-factory-backend:latest .
 docker run -d --name swarm-backend --network swarm-net --env-file .env -p 8000:8000 swarm-factory-backend:latest
 ```
 
-If a frontend Dockerfile exists, build and run it:
+(Optional) Frontend (if frontend/Dockerfile exists):
 
 ```bash
-docker compose -f docker.yaml up --build  # starts frontend+backend (frontend -> http://localhost:8080, backend -> http://localhost:8000)
-docker run -d --name swarm-frontend --network swarm-net -p 3000:3000 swarm-factory-frontend:latest
+docker build -f frontend/Dockerfile -t swarm-factory-frontend:latest ./frontend
+docker run -d --name swarm-frontend --network swarm-net -p 8080:80 swarm-factory-frontend:latest
 ```
 
-Open http://localhost:3000 (frontend) and http://localhost:8000 (backend).
+Recommended (run both services together):
 
-Open http://localhost:3000 and verify the backend is reachable at http://localhost:8000.
-
-3) Optional: docker-compose example
-
-Create a docker-compose.yml in repo root and run `docker compose up --build`:
-
-```yaml
-version: "3.8"
-services:
-  redis:
-    image: redis:alpine
-    ports:
-      - "6379:6379"
-  backend:
-    build:
-      context: .
-      dockerfile: infra/Dockerfile
-    env_file: .env
-    ports:
-      - "8000:8000"
-    depends_on:
-      - redis
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    depends_on:
-      - backend
-networks:
-  default:
-    name: swarm-net
+```bash
+docker compose -f docker.yaml up --build -d
 ```
+
+Frontend: http://localhost:8080
+Backend: http://localhost:8000
 
 Notes:
 - If any Dockerfile paths differ, update the -f / build.context paths accordingly.
