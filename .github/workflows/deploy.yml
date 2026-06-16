@@ -4,11 +4,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      force_redeploy:
-        description: Force redeploy even if no code changed
-        required: false
-        default: "false"
 
 env:
   PYTHON_VERSION: "3.11"
@@ -16,27 +11,22 @@ env:
   RESOURCE_GROUP: swarm-factory-rg
   ACR_NAME: swarmfactoryacr
   CONTAINER_APP_ENV: swarm-factory-env
-  IMAGE_TAG: ${{ github.sha }}
 
 jobs:
-  # ── 1. Run tests ──────────────────────────────────────────────────────────────
   test:
     name: Run Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt') }}
-
       - name: Install & test
         run: |
           pip install -r requirements.txt
@@ -57,9 +47,8 @@ jobs:
           AZURE_CONTAINER_APP_ENV: stub-env
           REDIS_URL: "redis://localhost:6379/0"
           API_KEY: "stub-api-key"
-          SECRET_KEY: "stub-secret-key-32-chars-minimum-x"
+          SECRET_KEY: "stub-secret-key-32-chars-minimum-xx"
 
-  # ── 2. Build & push image ─────────────────────────────────────────────────────
   build:
     name: Build & Push Docker Image
     runs-on: ubuntu-latest
@@ -67,27 +56,19 @@ jobs:
     timeout-minutes: 30
     outputs:
       image_uri: ${{ steps.image.outputs.uri }}
-
     steps:
       - uses: actions/checkout@v4
-
       - name: Azure login
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
       - name: Log in to ACR
         run: az acr login --name ${{ env.ACR_NAME }}
-
       - name: Set image URI
         id: image
         run: |
-          URI="${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:${{ env.IMAGE_TAG }}"
+          URI="${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:${{ github.sha }}"
           echo "uri=$URI" >> "$GITHUB_OUTPUT"
-
       - name: Build and push Docker image
         run: |
           docker build \
@@ -98,25 +79,18 @@ jobs:
           docker push "${{ steps.image.outputs.uri }}"
           docker push "${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:latest"
 
-  # ── 3. Deploy ─────────────────────────────────────────────────────────────────
   deploy:
     name: Deploy to Azure Container Apps
     runs-on: ubuntu-latest
     needs: build
     timeout-minutes: 20
     environment: production
-
     steps:
       - uses: actions/checkout@v4
-
       - name: Azure login
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
       - name: Deploy Container App
         run: |
           az containerapp update \
@@ -144,24 +118,20 @@ jobs:
               "SESSION_STORE_PATH=./sessions" \
               "GITHUB_TOKEN=${{ secrets.GH_TOKEN }}" \
               "GITHUB_ORG=${{ secrets.GH_ORG }}"
-
-      - name: Wait for rollout and smoke test
+      - name: Wait and smoke test
         run: |
-          echo "Waiting 60s for new revision to start..."
+          echo "Waiting 60s..."
           sleep 60
           FQDN=$(az containerapp show \
             --name "${{ env.APP_NAME }}" \
             --resource-group "${{ env.RESOURCE_GROUP }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv)
-          echo "Testing https://${FQDN}/health"
-          curl --fail --max-time 30 --retry 5 --retry-delay 10 \
-               "https://${FQDN}/health"
+          curl --fail --max-time 30 --retry 5 --retry-delay 10 "https://${FQDN}/health"
           echo "✅ Smoke test passed"
-
-      - name: Print deployment URL
+      - name: Print URL
         run: |
           FQDN=$(az containerapp show \
             --name "${{ env.APP_NAME }}" \
             --resource-group "${{ env.RESOURCE_GROUP }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv)
-          echo "🚀 Deployed to: https://${FQDN}"
+          echo "🚀 https://${FQDN}"
