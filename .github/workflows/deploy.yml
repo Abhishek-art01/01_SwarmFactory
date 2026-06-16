@@ -10,7 +10,6 @@ env:
   APP_NAME: swarm-factory-api
   RESOURCE_GROUP: swarm-factory-rg
   ACR_NAME: swarmfactoryacr
-  CONTAINER_APP_ENV: swarm-factory-env
 
 jobs:
   test:
@@ -22,11 +21,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt') }}
       - name: Install & test
         run: |
           pip install -r requirements.txt
@@ -42,9 +36,9 @@ jobs:
           GITHUB_TOKEN: "stub-token"
           GITHUB_ORG: "stub-org"
           AZURE_SUBSCRIPTION_ID: "00000000-0000-0000-0000-000000000000"
-          AZURE_RESOURCE_GROUP: stub-rg
-          AZURE_CONTAINER_REGISTRY: stub.azurecr.io
-          AZURE_CONTAINER_APP_ENV: stub-env
+          AZURE_RESOURCE_GROUP: "stub-rg"
+          AZURE_CONTAINER_REGISTRY: "stub.azurecr.io"
+          AZURE_CONTAINER_APP_ENV: "stub-env"
           REDIS_URL: "redis://localhost:6379/0"
           API_KEY: "stub-api-key"
           SECRET_KEY: "stub-secret-key-32-chars-minimum-xx"
@@ -58,26 +52,26 @@ jobs:
       image_uri: ${{ steps.image.outputs.uri }}
     steps:
       - uses: actions/checkout@v4
-      - name: Azure login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: Set Azure SP credentials
+
+      - name: Azure CLI login
         run: |
           az login --service-principal \
-            --username ${{ secrets.AZURE_CLIENT_ID }} \
-            --password ${{ secrets.AZURE_CLIENT_SECRET }} \
-            --tenant ${{ secrets.AZURE_TENANT_ID }}
-          az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+            --username "${{ secrets.AZURE_CLIENT_ID }}" \
+            --password "${{ secrets.AZURE_CLIENT_SECRET }}" \
+            --tenant "${{ secrets.AZURE_TENANT_ID }}"
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          echo "✅ Azure login successful"
+
       - name: Log in to ACR
         run: az acr login --name ${{ env.ACR_NAME }}
+
       - name: Set image URI
         id: image
         run: |
           URI="${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:${{ github.sha }}"
           echo "uri=$URI" >> "$GITHUB_OUTPUT"
+          echo "Image: $URI"
+
       - name: Build and push Docker image
         run: |
           docker build \
@@ -96,13 +90,16 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
-      - name: Azure login
+
+      - name: Azure CLI login
         run: |
           az login --service-principal \
-            --username ${{ secrets.AZURE_CLIENT_ID }} \
-            --password ${{ secrets.AZURE_CLIENT_SECRET }} \
-            --tenant ${{ secrets.AZURE_TENANT_ID }}
-          az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+            --username "${{ secrets.AZURE_CLIENT_ID }}" \
+            --password "${{ secrets.AZURE_CLIENT_SECRET }}" \
+            --tenant "${{ secrets.AZURE_TENANT_ID }}"
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          echo "✅ Azure login successful"
+
       - name: Deploy Container App
         run: |
           az containerapp update \
@@ -130,6 +127,7 @@ jobs:
               "SESSION_STORE_PATH=./sessions" \
               "GITHUB_TOKEN=${{ secrets.GH_TOKEN }}" \
               "GITHUB_ORG=${{ secrets.GH_ORG }}"
+
       - name: Wait and smoke test
         run: |
           echo "Waiting 60s..."
@@ -140,10 +138,11 @@ jobs:
             --query "properties.configuration.ingress.fqdn" -o tsv)
           curl --fail --max-time 30 --retry 5 --retry-delay 10 "https://${FQDN}/health"
           echo "✅ Smoke test passed"
+
       - name: Print URL
         run: |
           FQDN=$(az containerapp show \
             --name "${{ env.APP_NAME }}" \
             --resource-group "${{ env.RESOURCE_GROUP }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv)
-          echo "🚀 https://${FQDN}"
+          echo "🚀 Deployed: https://${FQDN}"
