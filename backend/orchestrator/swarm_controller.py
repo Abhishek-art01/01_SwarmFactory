@@ -153,7 +153,12 @@ async def run_swarm(job_id: str, requirement: str, options: dict[str, Any] | Non
 
     # Open a Redis client for this coroutine's lifetime
     # await: establishing TCP connection to Redis
-    redis = aioredis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
+    redis = aioredis.from_url(
+        settings.REDIS_URL,
+        encoding="utf-8",
+        decode_responses=True,
+        **settings.redis_connection_kwargs,
+    )
 
     try:
         # Mark job as running

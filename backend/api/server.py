@@ -94,12 +94,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         encoding="utf-8",
         decode_responses=True,
         max_connections=20,
+        **settings.redis_connection_kwargs,
     )
 
     # Ping to verify connectivity before we accept any traffic
     try:
         await redis_client.ping()
-        logger.info("Redis connection established", extra={"url": settings.REDIS_URL})
+        logger.info("Redis connection established", extra={"url": settings.safe_redis_url})
     except Exception as exc:
         # Log and re-raise — we don't want to start accepting traffic
         # if our state store is unavailable.

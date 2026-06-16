@@ -51,11 +51,14 @@ require_cmd curl
 
 : "${AZURE_RESOURCE_GROUP:=swarm-factory-rg}"
 : "${AZURE_CONTAINER_APP_NAME:=swarm-factory-api}"
+: "${AZURE_WORKER_APP_NAME:=swarm-factory-worker}"
 : "${AZURE_CONTAINER_APP_ENV:=swarm-factory-env}"
 : "${AZURE_CONTAINER_REGISTRY:=swarmfactoryacr.azurecr.io}"
 : "${IMAGE_REPOSITORY:=swarm-factory-api}"
 : "${DOCKERFILE:=infra/Dockerfile}"
 : "${SKIP_BUILD:=0}"
+: "${DEPLOY_WORKER:=1}"
+: "${CELERY_CONCURRENCY:=2}"
 
 require_var AZURE_RESOURCE_GROUP
 require_var AZURE_CONTAINER_APP_NAME
@@ -67,8 +70,9 @@ success "Azure CLI is authenticated"
 
 get_current_env() {
   local name="$1"
+  local app_name="${2:-$AZURE_CONTAINER_APP_NAME}"
   az containerapp show \
-    --name "$AZURE_CONTAINER_APP_NAME" \
+    --name "$app_name" \
     --resource-group "$AZURE_RESOURCE_GROUP" \
     --query "properties.template.containers[0].env[?name=='${name}'].value | [0]" \
     -o tsv 2>/dev/null || true
@@ -127,6 +131,12 @@ require_var AZURE_OPENAI_API_KEY
 
 if [[ "$SKIP_BUILD" != "1" ]]; then
   require_cmd docker
+  if [[ -z "${DOCKER_CONFIG:-}" ]]; then
+    TEMP_DOCKER_CONFIG="$(mktemp -d /tmp/swarm-factory-docker-config.XXXXXX)"
+    export DOCKER_CONFIG="$TEMP_DOCKER_CONFIG"
+    printf '{"auths":{}}\n' > "${DOCKER_CONFIG}/config.json"
+  fi
+
   info "Logging in to ACR: $ACR_NAME"
   az acr login --name "$ACR_NAME" >/dev/null
 
@@ -155,6 +165,7 @@ COMMON_ENV_VARS=(
   "AZURE_SEARCH_API_KEY=${AZURE_SEARCH_API_KEY:-}"
   "AZURE_SEARCH_INDEX_NAME=${AZURE_SEARCH_INDEX_NAME:-swarm-memory}"
   "REDIS_URL=${REDIS_URL}"
+  "REDIS_SSL_CERT_REQS=${REDIS_SSL_CERT_REQS:-required}"
   "API_KEY=${API_KEY}"
   "SECRET_KEY=${SECRET_KEY}"
   "APP_ENV=production"
@@ -166,6 +177,21 @@ COMMON_ENV_VARS=(
   "GITHUB_TOKEN=${GITHUB_TOKEN:-}"
   "GITHUB_ORG=${GITHUB_ORG:-}"
 )
+
+wait_for_ready() {
+  local app_name="$1"
+  info "Waiting for latest revision to become ready: $app_name"
+  for _ in $(seq 1 30); do
+    latest_revision="$(az containerapp show --name "$app_name" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.latestRevisionName -o tsv)"
+    ready_revision="$(az containerapp show --name "$app_name" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.latestReadyRevisionName -o tsv)"
+    if [[ -n "$latest_revision" && "$latest_revision" == "$ready_revision" ]]; then
+      success "Ready revision for $app_name: $ready_revision"
+      return
+    fi
+    sleep 10
+  done
+  error "Timed out waiting for $app_name to become ready"
+}
 
 info "Deploying to Container App: $AZURE_CONTAINER_APP_NAME"
 if az containerapp show --name "$AZURE_CONTAINER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
@@ -191,16 +217,46 @@ else
     --output none
 fi
 
-info "Waiting for latest revision to become ready..."
-for _ in $(seq 1 30); do
-  latest_revision="$(az containerapp show --name "$AZURE_CONTAINER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.latestRevisionName -o tsv)"
-  ready_revision="$(az containerapp show --name "$AZURE_CONTAINER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.latestReadyRevisionName -o tsv)"
-  if [[ -n "$latest_revision" && "$latest_revision" == "$ready_revision" ]]; then
-    success "Ready revision: $ready_revision"
-    break
+wait_for_ready "$AZURE_CONTAINER_APP_NAME"
+
+if [[ "$DEPLOY_WORKER" == "1" ]]; then
+  WORKER_ARGS=(
+    "-A" "backend.celery_app"
+    "worker"
+    "--loglevel=${LOG_LEVEL:-INFO}"
+    "--concurrency=${CELERY_CONCURRENCY}"
+  )
+
+  info "Deploying Celery worker Container App: $AZURE_WORKER_APP_NAME"
+  if az containerapp show --name "$AZURE_WORKER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
+    az containerapp update \
+      --name "$AZURE_WORKER_APP_NAME" \
+      --resource-group "$AZURE_RESOURCE_GROUP" \
+      --image "$IMAGE" \
+      --command "celery" \
+      --args "${WORKER_ARGS[@]}" \
+      --set-env-vars "${COMMON_ENV_VARS[@]}" \
+      --output none
+  else
+    az containerapp create \
+      --name "$AZURE_WORKER_APP_NAME" \
+      --resource-group "$AZURE_RESOURCE_GROUP" \
+      --environment "$AZURE_CONTAINER_APP_ENV" \
+      --image "$IMAGE" \
+      --min-replicas 1 \
+      --max-replicas 3 \
+      --cpu 1.0 \
+      --memory 2.0Gi \
+      --command "celery" \
+      --args "${WORKER_ARGS[@]}" \
+      --env-vars "${COMMON_ENV_VARS[@]}" \
+      --output none
   fi
-  sleep 10
-done
+
+  wait_for_ready "$AZURE_WORKER_APP_NAME"
+else
+  warn "Skipping Celery worker deployment because DEPLOY_WORKER=$DEPLOY_WORKER"
+fi
 
 FQDN="$(az containerapp show --name "$AZURE_CONTAINER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)"
 [[ -n "$FQDN" ]] || error "Could not resolve Container App FQDN"

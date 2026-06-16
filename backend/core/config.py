@@ -11,8 +11,10 @@ Usage:
 """
 
 import logging
+import ssl
 from functools import lru_cache
 from typing import Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -91,6 +93,10 @@ class Settings(BaseSettings):
         ...,
         description="Redis connection URL, e.g. redis://localhost:6379/0",
     )
+    REDIS_SSL_CERT_REQS: str = Field(
+        default="required",
+        description="'required' | 'optional' | 'none' for rediss:// certificate validation",
+    )
 
     # ── Security ──────────────────────────────────────────────────────────────
     API_KEY: str = Field(
@@ -164,6 +170,16 @@ class Settings(BaseSettings):
             raise ValueError(f"LOG_LEVEL must be one of {allowed}, got '{v}'")
         return upper
 
+    @field_validator("REDIS_SSL_CERT_REQS")
+    @classmethod
+    def validate_redis_ssl_cert_reqs(cls, v: str) -> str:
+        """Ensure Redis TLS certificate policy is understood by redis-py/Kombu."""
+        normalised = v.lower()
+        allowed = {"required", "optional", "none"}
+        if normalised not in allowed:
+            raise ValueError(f"REDIS_SSL_CERT_REQS must be one of {allowed}, got '{v}'")
+        return normalised
+
     @property
     def is_production(self) -> bool:
         """Convenience flag: True when running in production mode."""
@@ -178,6 +194,47 @@ class Settings(BaseSettings):
     def celery_result_backend(self) -> str:
         """Celery result backend URL."""
         return self.REDIS_URL
+
+    @property
+    def redis_uses_ssl(self) -> bool:
+        """True when Redis connections should use TLS."""
+        return self.REDIS_URL.startswith("rediss://")
+
+    @property
+    def redis_ssl_cert_reqs(self) -> ssl.VerifyMode:
+        """Return the ssl.CERT_* constant configured for rediss:// connections."""
+        return {
+            "required": ssl.CERT_REQUIRED,
+            "optional": ssl.CERT_OPTIONAL,
+            "none": ssl.CERT_NONE,
+        }[self.REDIS_SSL_CERT_REQS]
+
+    @property
+    def redis_connection_kwargs(self) -> dict:
+        """Extra redis-py kwargs needed for rediss:// connections."""
+        if not self.redis_uses_ssl:
+            return {}
+        return {"ssl_cert_reqs": self.redis_ssl_cert_reqs}
+
+    @property
+    def celery_redis_ssl_options(self) -> dict | None:
+        """TLS options Kombu/Celery require when the broker/backend URL is rediss://."""
+        if not self.redis_uses_ssl:
+            return None
+        return {"ssl_cert_reqs": self.redis_ssl_cert_reqs}
+
+    @property
+    def safe_redis_url(self) -> str:
+        """Redis URL with credentials removed for logs."""
+        parsed = urlsplit(self.REDIS_URL)
+        if not parsed.password:
+            return self.REDIS_URL
+
+        hostname = parsed.hostname or ""
+        netloc = f"{parsed.username or ''}:***@{hostname}"
+        if parsed.port:
+            netloc = f"{netloc}:{parsed.port}"
+        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 # ── Singleton accessor ────────────────────────────────────────────────────────

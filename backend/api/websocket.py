@@ -356,6 +356,7 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str) -> None:
             encoding="utf-8",
             decode_responses=True,
             socket_timeout=REDIS_READ_TIMEOUT + 5,
+            **settings.redis_connection_kwargs,
         )
         pubsub = redis_client.pubsub()
         channel = f"job:{job_id}:events"

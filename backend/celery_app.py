@@ -75,6 +75,12 @@ celery_app.conf.update(
     enable_utc=True,
 )
 
+if settings.celery_redis_ssl_options:
+    celery_app.conf.update(
+        broker_use_ssl=settings.celery_redis_ssl_options,
+        redis_backend_use_ssl=settings.celery_redis_ssl_options,
+    )
+
 
 # ── Task definition ───────────────────────────────────────────────────────────
 
@@ -147,7 +153,11 @@ def run_swarm_task(self, job_id: str, requirement: str, options: dict | None = N
             # Update Redis job status to failed
             try:
                 import redis as sync_redis
-                r = sync_redis.from_url(settings.REDIS_URL, decode_responses=True)
+                r = sync_redis.from_url(
+                    settings.REDIS_URL,
+                    decode_responses=True,
+                    **settings.redis_connection_kwargs,
+                )
                 r.hset(f"job:{job_id}", mapping={"status": "failed", "error": str(exc)})
                 r.close()
             except Exception:
