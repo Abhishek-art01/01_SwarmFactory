@@ -137,7 +137,7 @@ jobs:
               "JOB_TIMEOUT_SECONDS=600" \
               "SESSION_STORE_PATH=./sessions" \
               "GITHUB_TOKEN=${{ secrets.GH_TOKEN }}" \
-              "GITHUB_ORG=${{ secrets.GITHUB_ORG }}"
+              "GITHUB_ORG=${{ secrets.GH_ORG }}"
 
       - name: Wait for rollout and smoke test
         run: |
