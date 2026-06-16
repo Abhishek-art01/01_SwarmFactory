@@ -1,98 +1,225 @@
 #!/usr/bin/env bash
 # =============================================================
-# Swarm Factory — Production Deployment Script
-# Builds, pushes, and deploys the app to Azure Container Apps.
-# Usage: bash scripts/deploy.sh
+# Swarm Factory — Fast Azure Container Apps Deployment
+# Builds the local image, pushes it to ACR, updates Container Apps,
+# and verifies the live app.
+#
+# Usage:
+#   bash scripts/deploy.sh
+#   TAG=my-test bash scripts/deploy.sh
+#   SKIP_BUILD=1 IMAGE=swarmfactoryacr.azurecr.io/swarm-factory-api:tag bash scripts/deploy.sh
 # =============================================================
 set -euo pipefail
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'; NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 info()    { echo -e "${BLUE}[INFO]${NC}  $*"; }
 success() { echo -e "${GREEN}[OK]${NC}    $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 
-# Load .env
-[ -f .env ] && export $(grep -v '^#' .env | xargs) || error ".env not found. Run scripts/setup_azure.sh first."
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
 
-# Validate required vars
-: "${AZURE_CONTAINER_REGISTRY:?Set AZURE_CONTAINER_REGISTRY in .env}"
-: "${AZURE_RESOURCE_GROUP:?Set AZURE_RESOURCE_GROUP in .env}"
-: "${AZURE_CONTAINER_APP_NAME:?Set AZURE_CONTAINER_APP_NAME in .env}"
-: "${AZURE_CONTAINER_APP_ENV:?Set AZURE_CONTAINER_APP_ENV in .env}"
+load_env() {
+  if [[ -f .env ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source .env
+    set +a
+  else
+    warn ".env not found; using defaults and current environment"
+  fi
+}
 
-IMAGE_TAG="${AZURE_CONTAINER_REGISTRY}/swarm-factory:$(git rev-parse --short HEAD 2>/dev/null || echo latest)"
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || error "$1 is required but was not found"
+}
 
-# ── 1. Build frontend ─────────────────────────────────────────────────────────
-info "Building React frontend..."
-cd frontend
-VITE_API_URL="https://${AZURE_CONTAINER_APP_NAME}.azurecontainerapps.io" \
-VITE_WS_URL="wss://${AZURE_CONTAINER_APP_NAME}.azurecontainerapps.io" \
-npm run build
-cd ..
-success "Frontend built → frontend/dist/"
+trim_trailing_space() {
+  printf '%s' "$1" | sed 's/[[:space:]]*$//'
+}
 
-# ── 2. Build Docker image ─────────────────────────────────────────────────────
-info "Building Docker image: $IMAGE_TAG"
-docker build -t "$IMAGE_TAG" -f infra/Dockerfile .
-success "Image built"
+require_var() {
+  local name="$1"
+  [[ -n "${!name:-}" ]] || error "$name is required. Set it in .env or export it before running."
+}
 
-# ── 3. Push to ACR ───────────────────────────────────────────────────────────
-info "Logging in to ACR..."
-az acr login --name "$(echo "$AZURE_CONTAINER_REGISTRY" | cut -d. -f1)"
+load_env
+require_cmd az
+require_cmd git
+require_cmd curl
 
-info "Pushing image to ACR..."
-docker push "$IMAGE_TAG"
-success "Image pushed: $IMAGE_TAG"
+: "${AZURE_RESOURCE_GROUP:=swarm-factory-rg}"
+: "${AZURE_CONTAINER_APP_NAME:=swarm-factory-api}"
+: "${AZURE_CONTAINER_APP_ENV:=swarm-factory-env}"
+: "${AZURE_CONTAINER_REGISTRY:=swarmfactoryacr.azurecr.io}"
+: "${IMAGE_REPOSITORY:=swarm-factory-api}"
+: "${DOCKERFILE:=infra/Dockerfile}"
+: "${SKIP_BUILD:=0}"
 
-# ── 4. Deploy to Container Apps ───────────────────────────────────────────────
-info "Deploying to Azure Container Apps: $AZURE_CONTAINER_APP_NAME..."
+require_var AZURE_RESOURCE_GROUP
+require_var AZURE_CONTAINER_APP_NAME
+require_var AZURE_CONTAINER_REGISTRY
 
-# Build env vars string from .env for the container
-ENV_VARS="AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT} \
-AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY} \
-AZURE_OPENAI_DEPLOYMENT_GPT4O=${AZURE_OPENAI_DEPLOYMENT_GPT4O} \
-AZURE_OPENAI_DEPLOYMENT_PHI4=${AZURE_OPENAI_DEPLOYMENT_PHI4} \
-AZURE_OPENAI_DEPLOYMENT_MINI=${AZURE_OPENAI_DEPLOYMENT_MINI} \
-REDIS_URL=${REDIS_URL} \
-API_KEY=${API_KEY} \
-SECRET_KEY=${SECRET_KEY} \
-APP_ENV=production \
-GITHUB_TOKEN=${GITHUB_TOKEN} \
-GITHUB_ORG=${GITHUB_ORG}"
+info "Checking Azure login..."
+az account show >/dev/null 2>&1 || az login >/dev/null
+success "Azure CLI is authenticated"
 
-# Check if app exists
-if az containerapp show --name "$AZURE_CONTAINER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" &>/dev/null; then
-    info "Updating existing Container App..."
-    az containerapp update \
-        --name "$AZURE_CONTAINER_APP_NAME" \
-        --resource-group "$AZURE_RESOURCE_GROUP" \
-        --image "$IMAGE_TAG" \
-        --output none
-else
-    info "Creating new Container App..."
-    az containerapp create \
-        --name "$AZURE_CONTAINER_APP_NAME" \
-        --resource-group "$AZURE_RESOURCE_GROUP" \
-        --environment "$AZURE_CONTAINER_APP_ENV" \
-        --image "$IMAGE_TAG" \
-        --target-port 8000 \
-        --ingress external \
-        --min-replicas 1 \
-        --max-replicas 5 \
-        --cpu 1.0 \
-        --memory 2.0Gi \
-        --env-vars $ENV_VARS \
-        --output none
-fi
-
-# ── 5. Get live URL ───────────────────────────────────────────────────────────
-LIVE_URL=$(az containerapp show \
+get_current_env() {
+  local name="$1"
+  az containerapp show \
     --name "$AZURE_CONTAINER_APP_NAME" \
     --resource-group "$AZURE_RESOURCE_GROUP" \
-    --query "properties.configuration.ingress.fqdn" -o tsv)
+    --query "properties.template.containers[0].env[?name=='${name}'].value | [0]" \
+    -o tsv 2>/dev/null || true
+}
 
-success "Deployment complete!"
+hydrate_from_azure() {
+  if ! az containerapp show --name "$AZURE_CONTAINER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
+    return
+  fi
+
+  local current
+  for name in AZURE_OPENAI_ENDPOINT AZURE_OPENAI_API_KEY AZURE_SEARCH_ENDPOINT AZURE_SEARCH_API_KEY REDIS_URL API_KEY SECRET_KEY GITHUB_TOKEN GITHUB_ORG; do
+    current="$(get_current_env "$name")"
+    if [[ -z "$current" ]]; then
+      continue
+    fi
+
+    case "$name" in
+      REDIS_URL)
+        if [[ -z "${REDIS_URL:-}" || "${REDIS_URL:-}" == redis://localhost* ]]; then
+          export REDIS_URL="$current"
+        fi
+        ;;
+      API_KEY)
+        if [[ -z "${API_KEY:-}" || "${API_KEY:-}" == swarm-factory-dev-key ]]; then
+          export API_KEY="$current"
+        fi
+        ;;
+      SECRET_KEY)
+        if [[ -z "${SECRET_KEY:-}" || "${SECRET_KEY:-}" == change-this-* ]]; then
+          export SECRET_KEY="$current"
+        fi
+        ;;
+      *)
+        if [[ -z "${!name:-}" ]]; then
+          export "$name=$current"
+        fi
+        ;;
+    esac
+  done
+}
+
+hydrate_from_azure
+
+ACR_NAME="${ACR_NAME:-${AZURE_CONTAINER_REGISTRY%%.*}}"
+API_KEY="$(trim_trailing_space "${API_KEY:-}")"
+VITE_API_KEY="$(trim_trailing_space "${VITE_API_KEY:-$API_KEY}")"
+TAG="${TAG:-$(git rev-parse --short=12 HEAD 2>/dev/null || date -u +%Y%m%d%H%M%S)}"
+IMAGE="${IMAGE:-${AZURE_CONTAINER_REGISTRY}/${IMAGE_REPOSITORY}:${TAG}}"
+
+require_var API_KEY
+require_var SECRET_KEY
+require_var REDIS_URL
+require_var AZURE_OPENAI_ENDPOINT
+require_var AZURE_OPENAI_API_KEY
+
+if [[ "$SKIP_BUILD" != "1" ]]; then
+  require_cmd docker
+  info "Logging in to ACR: $ACR_NAME"
+  az acr login --name "$ACR_NAME" >/dev/null
+
+  info "Building image: $IMAGE"
+  docker build \
+    --file "$DOCKERFILE" \
+    --build-arg VITE_API_KEY="$VITE_API_KEY" \
+    --tag "$IMAGE" \
+    .
+
+  info "Pushing image: $IMAGE"
+  docker push "$IMAGE"
+else
+  info "Skipping build/push; deploying existing image: $IMAGE"
+fi
+
+COMMON_ENV_VARS=(
+  "AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}"
+  "AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}"
+  "AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-02-01}"
+  "AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}"
+  "AZURE_OPENAI_DEPLOYMENT_GPT4O=${AZURE_OPENAI_DEPLOYMENT_GPT4O:-gpt-4o}"
+  "AZURE_OPENAI_DEPLOYMENT_PHI4=${AZURE_OPENAI_DEPLOYMENT_PHI4:-phi-4}"
+  "AZURE_OPENAI_DEPLOYMENT_MINI=${AZURE_OPENAI_DEPLOYMENT_MINI:-gpt-4o-mini}"
+  "AZURE_SEARCH_ENDPOINT=${AZURE_SEARCH_ENDPOINT:-}"
+  "AZURE_SEARCH_API_KEY=${AZURE_SEARCH_API_KEY:-}"
+  "AZURE_SEARCH_INDEX_NAME=${AZURE_SEARCH_INDEX_NAME:-swarm-memory}"
+  "REDIS_URL=${REDIS_URL}"
+  "API_KEY=${API_KEY}"
+  "SECRET_KEY=${SECRET_KEY}"
+  "APP_ENV=production"
+  "LOG_LEVEL=${LOG_LEVEL:-INFO}"
+  "MAX_CONCURRENT_JOBS=${MAX_CONCURRENT_JOBS:-5}"
+  "JOB_TIMEOUT_SECONDS=${JOB_TIMEOUT_SECONDS:-600}"
+  "SESSION_STORE_PATH=${SESSION_STORE_PATH:-./sessions}"
+  "PYTHONPATH=/app/backend"
+  "GITHUB_TOKEN=${GITHUB_TOKEN:-}"
+  "GITHUB_ORG=${GITHUB_ORG:-}"
+)
+
+info "Deploying to Container App: $AZURE_CONTAINER_APP_NAME"
+if az containerapp show --name "$AZURE_CONTAINER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
+  az containerapp update \
+    --name "$AZURE_CONTAINER_APP_NAME" \
+    --resource-group "$AZURE_RESOURCE_GROUP" \
+    --image "$IMAGE" \
+    --set-env-vars "${COMMON_ENV_VARS[@]}" \
+    --output none
+else
+  az containerapp create \
+    --name "$AZURE_CONTAINER_APP_NAME" \
+    --resource-group "$AZURE_RESOURCE_GROUP" \
+    --environment "$AZURE_CONTAINER_APP_ENV" \
+    --image "$IMAGE" \
+    --target-port 8000 \
+    --ingress external \
+    --min-replicas 1 \
+    --max-replicas 5 \
+    --cpu 1.0 \
+    --memory 2.0Gi \
+    --env-vars "${COMMON_ENV_VARS[@]}" \
+    --output none
+fi
+
+info "Waiting for latest revision to become ready..."
+for _ in $(seq 1 30); do
+  latest_revision="$(az containerapp show --name "$AZURE_CONTAINER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.latestRevisionName -o tsv)"
+  ready_revision="$(az containerapp show --name "$AZURE_CONTAINER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.latestReadyRevisionName -o tsv)"
+  if [[ -n "$latest_revision" && "$latest_revision" == "$ready_revision" ]]; then
+    success "Ready revision: $ready_revision"
+    break
+  fi
+  sleep 10
+done
+
+FQDN="$(az containerapp show --name "$AZURE_CONTAINER_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)"
+[[ -n "$FQDN" ]] || error "Could not resolve Container App FQDN"
+
+info "Verifying live app..."
+curl --fail --max-time 30 --retry 5 --retry-delay 5 "https://${FQDN}/health" >/dev/null
+status_code="$(curl --silent --show-error --max-time 30 --retry 5 --retry-delay 5 \
+  -H "X-API-Key: ${API_KEY}" \
+  -o /tmp/swarm-factory-deploy-check.json \
+  -w '%{http_code}' \
+  "https://${FQDN}/api/status/deploy-check")"
+if [[ "$status_code" != "404" ]] || ! grep -q 'job_not_found' /tmp/swarm-factory-deploy-check.json 2>/dev/null; then
+  cat /tmp/swarm-factory-deploy-check.json 2>/dev/null || true
+  error "Protected API verification failed with HTTP ${status_code}"
+fi
+
+success "Deployment complete"
 echo ""
-echo "  Live URL: https://${LIVE_URL}"
-echo "  Health:   https://${LIVE_URL}/health"
+echo "  Image:  $IMAGE"
+echo "  URL:    https://${FQDN}"
+echo "  Health: https://${FQDN}/health"
 echo ""
