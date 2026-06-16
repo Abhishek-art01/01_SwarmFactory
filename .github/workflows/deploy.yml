@@ -117,16 +117,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate Azure secrets
+      - name: Validate deployment secrets
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
           API_KEY: ${{ secrets.API_KEY }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
         run: |
           missing=0
-          for name in AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID API_KEY; do
+          for name in AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_OPENAI_ENDPOINT AZURE_OPENAI_API_KEY REDIS_URL API_KEY SECRET_KEY; do
             if [ -z "${!name}" ]; then
               echo "::error title=Missing secret::$name is not set or not available to this job"
               missing=1
@@ -173,6 +177,7 @@ jobs:
               "MAX_CONCURRENT_JOBS=5" \
               "JOB_TIMEOUT_SECONDS=600" \
               "SESSION_STORE_PATH=./sessions" \
+              "PYTHONPATH=/app/backend" \
               "GITHUB_TOKEN=${{ secrets.GH_TOKEN }}" \
               "GITHUB_ORG=${{ secrets.GH_ORG }}"
 

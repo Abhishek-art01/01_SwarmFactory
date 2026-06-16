@@ -25,6 +25,7 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 FROM python:3.11-slim AS production
 LABEL maintainer="Swarm Factory Team"
 WORKDIR /app
+ENV PYTHONPATH=/app/backend
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl git && rm -rf /var/lib/apt/lists/*
