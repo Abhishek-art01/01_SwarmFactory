@@ -1,0 +1,50 @@
+name: Playwright E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e:
+    name: Frontend E2E tests (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install frontend and e2e deps
+        run: |
+          cd frontend
+          npm ci
+          cd e2e
+          npm ci
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build
+
+      - name: Serve built frontend
+        run: |
+          # serve the static build on port 8080 so Playwright can test it
+          npx http-server frontend/dist -p 8080 &
+          sleep 2
+
+      - name: Install Playwright browsers
+        run: |
+          cd frontend/e2e
+          npx playwright install --with-deps
+
+      - name: Run Playwright tests
+        run: |
+          cd frontend/e2e
+          npm test
