@@ -60,9 +60,10 @@ jobs:
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          API_KEY: ${{ secrets.API_KEY }}
         run: |
           missing=0
-          for name in AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+          for name in AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID API_KEY; do
             if [ -z "${!name}" ]; then
               echo "::error title=Missing secret::$name is not set or not available to this job"
               missing=1
@@ -95,9 +96,12 @@ jobs:
           echo "Image: $URI"
 
       - name: Build and push Docker image
+        env:
+          API_KEY: ${{ secrets.API_KEY }}
         run: |
           docker build \
             --file infra/Dockerfile \
+            --build-arg VITE_API_KEY="$API_KEY" \
             --tag "${{ steps.image.outputs.uri }}" \
             --tag "${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:latest" \
             .
@@ -119,9 +123,10 @@ jobs:
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          API_KEY: ${{ secrets.API_KEY }}
         run: |
           missing=0
-          for name in AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+          for name in AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID API_KEY; do
             if [ -z "${!name}" ]; then
               echo "::error title=Missing secret::$name is not set or not available to this job"
               missing=1
@@ -172,6 +177,8 @@ jobs:
               "GITHUB_ORG=${{ secrets.GH_ORG }}"
 
       - name: Wait and smoke test
+        env:
+          API_KEY: ${{ secrets.API_KEY }}
         run: |
           echo "Waiting 60s..."
           sleep 60
@@ -179,7 +186,9 @@ jobs:
             --name "${{ env.APP_NAME }}" \
             --resource-group "${{ env.RESOURCE_GROUP }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv)
-          curl --fail --max-time 30 --retry 5 --retry-delay 10 "https://${FQDN}/health"
+          curl --fail --max-time 30 --retry 5 --retry-delay 10 \
+            -H "X-API-Key: $API_KEY" \
+            "https://${FQDN}/health"
           echo "✅ Smoke test passed"
 
       - name: Print URL

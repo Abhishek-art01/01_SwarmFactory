@@ -9,6 +9,8 @@ WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm ci --silent
 COPY frontend/ ./
+ARG VITE_API_KEY
+ENV VITE_API_KEY=$VITE_API_KEY
 RUN npm run build
 
 # Stage 2: Python deps
