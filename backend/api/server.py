@@ -17,11 +17,13 @@ Import this module's `app` object in your ASGI server command:
 import logging
 import logging.config
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from core.config import settings
 from api.middleware.auth import AuthMiddleware
@@ -174,6 +176,11 @@ def create_app() -> FastAPI:
 
     # ── WebSocket router ──────────────────────────────────────────────────────
     app.include_router(ws_router)                              # WS /ws/{job_id}
+
+    # ── Frontend SPA ──────────────────────────────────────────────────────────
+    frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    if frontend_dist.exists():
+        app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
 
     logger.info("FastAPI app created", extra={"routes": len(app.routes)})
     return app

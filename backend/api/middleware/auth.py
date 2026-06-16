@@ -1,7 +1,7 @@
 """
 api/middleware/auth.py
 -----------------------
-Starlette middleware that validates the X-API-Key header on every request.
+Starlette middleware that validates the X-API-Key header on protected API requests.
 
 Excluded paths (no key required):
   - GET /health        (public liveness probe)
@@ -68,6 +68,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if path.startswith(excluded):
                 # await: forwarding to the next handler in the middleware chain
                 return await call_next(request)
+
+        # The bundled frontend is public. API routes remain protected.
+        if not path.startswith("/api/"):
+            return await call_next(request)
 
         api_key = request.headers.get("X-API-Key")
 

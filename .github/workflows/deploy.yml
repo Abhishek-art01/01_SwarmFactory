@@ -62,6 +62,7 @@ jobs:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           API_KEY: ${{ secrets.API_KEY }}
         run: |
+          API_KEY="$(printf '%s' "$API_KEY" | sed 's/[[:space:]]*$//')"
           missing=0
           for name in AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID API_KEY; do
             if [ -z "${!name}" ]; then
@@ -99,6 +100,7 @@ jobs:
         env:
           API_KEY: ${{ secrets.API_KEY }}
         run: |
+          API_KEY="$(printf '%s' "$API_KEY" | sed 's/[[:space:]]*$//')"
           docker build \
             --file infra/Dockerfile \
             --build-arg VITE_API_KEY="$API_KEY" \
@@ -129,6 +131,7 @@ jobs:
           API_KEY: ${{ secrets.API_KEY }}
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
         run: |
+          API_KEY="$(printf '%s' "$API_KEY" | sed 's/[[:space:]]*$//')"
           missing=0
           for name in AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_OPENAI_ENDPOINT AZURE_OPENAI_API_KEY REDIS_URL API_KEY SECRET_KEY; do
             if [ -z "${!name}" ]; then
@@ -153,38 +156,50 @@ jobs:
           echo "✅ Azure login successful"
 
       - name: Deploy Container App
+        env:
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_SEARCH_ENDPOINT: ${{ secrets.AZURE_SEARCH_ENDPOINT }}
+          AZURE_SEARCH_API_KEY: ${{ secrets.AZURE_SEARCH_API_KEY }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          API_KEY: ${{ secrets.API_KEY }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_ORG: ${{ secrets.GH_ORG }}
         run: |
+          API_KEY="$(printf '%s' "$API_KEY" | sed 's/[[:space:]]*$//')"
           az containerapp update \
             --name "${{ env.APP_NAME }}" \
             --resource-group "${{ env.RESOURCE_GROUP }}" \
             --image "${{ needs.build.outputs.image_uri }}" \
             --set-env-vars \
-              "AZURE_OPENAI_ENDPOINT=${{ secrets.AZURE_OPENAI_ENDPOINT }}" \
-              "AZURE_OPENAI_API_KEY=${{ secrets.AZURE_OPENAI_API_KEY }}" \
+              "AZURE_OPENAI_ENDPOINT=$AZURE_OPENAI_ENDPOINT" \
+              "AZURE_OPENAI_API_KEY=$AZURE_OPENAI_API_KEY" \
               "AZURE_OPENAI_API_VERSION=2024-02-01" \
               "AZURE_OPENAI_DEPLOYMENT=gpt-4o" \
               "AZURE_OPENAI_DEPLOYMENT_GPT4O=gpt-4o" \
               "AZURE_OPENAI_DEPLOYMENT_PHI4=phi-4" \
               "AZURE_OPENAI_DEPLOYMENT_MINI=gpt-4o-mini" \
-              "AZURE_SEARCH_ENDPOINT=${{ secrets.AZURE_SEARCH_ENDPOINT }}" \
-              "AZURE_SEARCH_API_KEY=${{ secrets.AZURE_SEARCH_API_KEY }}" \
+              "AZURE_SEARCH_ENDPOINT=$AZURE_SEARCH_ENDPOINT" \
+              "AZURE_SEARCH_API_KEY=$AZURE_SEARCH_API_KEY" \
               "AZURE_SEARCH_INDEX_NAME=swarm-memory" \
-              "REDIS_URL=${{ secrets.REDIS_URL }}" \
-              "API_KEY=${{ secrets.API_KEY }}" \
-              "SECRET_KEY=${{ secrets.SECRET_KEY }}" \
+              "REDIS_URL=$REDIS_URL" \
+              "API_KEY=$API_KEY" \
+              "SECRET_KEY=$SECRET_KEY" \
               "APP_ENV=production" \
               "LOG_LEVEL=INFO" \
               "MAX_CONCURRENT_JOBS=5" \
               "JOB_TIMEOUT_SECONDS=600" \
               "SESSION_STORE_PATH=./sessions" \
               "PYTHONPATH=/app/backend" \
-              "GITHUB_TOKEN=${{ secrets.GH_TOKEN }}" \
-              "GITHUB_ORG=${{ secrets.GH_ORG }}"
+              "GITHUB_TOKEN=$GH_TOKEN" \
+              "GITHUB_ORG=$GH_ORG"
 
       - name: Wait and smoke test
         env:
           API_KEY: ${{ secrets.API_KEY }}
         run: |
+          API_KEY="$(printf '%s' "$API_KEY" | sed 's/[[:space:]]*$//')"
           echo "Waiting 60s..."
           sleep 60
           FQDN=$(az containerapp show \
