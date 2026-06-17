@@ -20,6 +20,7 @@ def empty_state() -> dict[str, dict[str, Any]]:
         "workspaces": {},
         "conversations": {},
         "messages": {},
+        "files": {},
     }
 
 

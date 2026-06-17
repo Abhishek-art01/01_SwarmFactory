@@ -9,7 +9,13 @@ import {
   getLatestConversation,
   getProject,
   getProjectContext,
+  getWorkspaceFileContent,
+  getWorkspaceFileTree,
   listConversations,
+  saveWorkspaceFile,
+  FileContentResponse,
+  FileTreeNode,
+  FileTreeResponse,
   ProjectDetail,
   ProjectContext,
 } from "../lib/api";
@@ -24,7 +30,13 @@ export default function ProjectChat() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [isContextLoading, setIsContextLoading] = useState(false);
+  const [isFilesLoading, setIsFilesLoading] = useState(false);
+  const [fileTree, setFileTree] = useState<FileTreeResponse | null>(null);
+  const [selectedFile, setSelectedFile] = useState<FileContentResponse | null>(null);
+  const [filePath, setFilePath] = useState("README.md");
+  const [fileContent, setFileContent] = useState("# Project notes\n");
   const [error, setError] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [contextPreview, setContextPreview] = useState<ProjectContext | null>(null);
   const messageEndRef = useRef<HTMLDivElement>(null);
 
@@ -34,6 +46,21 @@ export default function ProjectChat() {
     const items = await listConversations(id);
     setConversations(items);
     return items;
+  };
+
+  const refreshFiles = async (id: string, workspace: string) => {
+    setIsFilesLoading(true);
+    setFileError(null);
+    try {
+      const tree = await getWorkspaceFileTree(id, workspace);
+      setFileTree(tree);
+      return tree;
+    } catch (err) {
+      setFileError(err instanceof Error ? err.message : "Could not load workspace files");
+      return null;
+    } finally {
+      setIsFilesLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -51,6 +78,10 @@ export default function ProjectChat() {
         ]);
         if (cancelled) return;
         setProject(projectResult);
+        const firstWorkspaceId = projectResult.workspaces[0]?.id;
+        if (firstWorkspaceId) {
+          await refreshFiles(id, firstWorkspaceId);
+        }
         const all = await refreshConversations(id);
         if (cancelled) return;
         const selected = conversationResult ?? all[0] ?? null;
@@ -118,6 +149,36 @@ export default function ProjectChat() {
     }
   };
 
+  const selectFile = async (path: string) => {
+    if (!projectId || !workspaceId) return;
+    setFileError(null);
+    try {
+      setSelectedFile(await getWorkspaceFileContent(projectId, workspaceId, path));
+    } catch (err) {
+      setFileError(err instanceof Error ? err.message : "Could not load file content");
+    }
+  };
+
+  const saveFile = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!projectId || !workspaceId || !filePath.trim()) return;
+    setIsFilesLoading(true);
+    setFileError(null);
+    try {
+      const saved = await saveWorkspaceFile(projectId, workspaceId, {
+        path: filePath,
+        content: fileContent,
+      });
+      await refreshFiles(projectId, workspaceId);
+      setSelectedFile(await getWorkspaceFileContent(projectId, workspaceId, saved.path));
+      setFilePath(saved.path);
+    } catch (err) {
+      setFileError(err instanceof Error ? err.message : "Could not save file");
+    } finally {
+      setIsFilesLoading(false);
+    }
+  };
+
   const sendMessage = async (event: FormEvent) => {
     event.preventDefault();
     if (!projectId || !input.trim()) return;
@@ -168,7 +229,7 @@ export default function ProjectChat() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-4 grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-4">
+      <main className="max-w-7xl mx-auto px-4 py-4 grid grid-cols-1 xl:grid-cols-[260px_minmax(0,1fr)_320px] gap-4">
         <aside className="rounded-lg border border-slate-800 bg-[#070e17] min-h-[420px]">
           <div className="border-b border-slate-800 px-4 py-3 flex items-center justify-between">
             <span className="text-xs font-mono text-slate-300">Conversations</span>
@@ -262,8 +323,152 @@ export default function ProjectChat() {
             </div>
           </form>
         </section>
+
+        <FileWorkspacePanel
+          fileTree={fileTree}
+          selectedFile={selectedFile}
+          isLoading={isFilesLoading}
+          error={fileError}
+          filePath={filePath}
+          fileContent={fileContent}
+          onFilePathChange={setFilePath}
+          onFileContentChange={setFileContent}
+          onFileSelect={selectFile}
+          onSaveFile={saveFile}
+        />
       </main>
     </div>
+  );
+}
+
+function FileWorkspacePanel({
+  fileTree,
+  selectedFile,
+  isLoading,
+  error,
+  filePath,
+  fileContent,
+  onFilePathChange,
+  onFileContentChange,
+  onFileSelect,
+  onSaveFile,
+}: {
+  fileTree: FileTreeResponse | null;
+  selectedFile: FileContentResponse | null;
+  isLoading: boolean;
+  error: string | null;
+  filePath: string;
+  fileContent: string;
+  onFilePathChange: (value: string) => void;
+  onFileContentChange: (value: string) => void;
+  onFileSelect: (path: string) => void;
+  onSaveFile: (event: FormEvent) => void;
+}) {
+  return (
+    <aside className="rounded-lg border border-slate-800 bg-[#070e17] min-h-[420px] flex flex-col">
+      <div className="border-b border-slate-800 px-4 py-3">
+        <p className="text-xs font-mono text-slate-300">File Explorer</p>
+        <p className="mt-1 text-[10px] font-mono text-slate-600">Workspace files stored in Azure Blob.</p>
+      </div>
+
+      <div className="p-4 space-y-4">
+        {error && (
+          <div className="rounded border border-red-800/60 bg-red-950/30 px-3 py-2 text-xs font-mono text-red-300">
+            {error}
+          </div>
+        )}
+
+        <div className="rounded border border-slate-800 bg-[#030810] p-3">
+          {isLoading && !fileTree ? (
+            <p className="text-xs font-mono text-slate-500">Loading files...</p>
+          ) : !fileTree || fileTree.files.length === 0 ? (
+            <p className="text-xs font-mono text-slate-600">No files in this workspace yet.</p>
+          ) : (
+            <div className="space-y-1">
+              {fileTree.tree.map((node) => (
+                <FileTreeItem key={node.path} node={node} onFileSelect={onFileSelect} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        <form onSubmit={onSaveFile} className="rounded border border-slate-800 bg-[#030810] p-3 space-y-3">
+          <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500">Create or update file</p>
+          <input
+            value={filePath}
+            onChange={(event) => onFilePathChange(event.target.value)}
+            className="w-full rounded border border-slate-800 bg-[#070e17] px-2 py-2 text-xs font-mono text-slate-100 outline-none focus:border-cyan-800"
+            placeholder="src/App.tsx"
+          />
+          <textarea
+            value={fileContent}
+            onChange={(event) => onFileContentChange(event.target.value)}
+            className="min-h-28 w-full resize-y rounded border border-slate-800 bg-[#070e17] px-2 py-2 text-xs font-mono text-slate-100 outline-none focus:border-cyan-800"
+            placeholder="File content"
+          />
+          <button
+            disabled={isLoading || !filePath.trim()}
+            className="w-full rounded border border-cyan-800/70 bg-cyan-950/40 px-3 py-2 text-[10px] font-mono text-cyan-300 disabled:opacity-40"
+          >
+            {isLoading ? "Saving..." : "Save file"}
+          </button>
+        </form>
+
+        <div className="rounded border border-slate-800 bg-[#030810] p-3">
+          <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500">Preview</p>
+          {selectedFile ? (
+            <div className="mt-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="truncate text-xs font-mono text-slate-200">{selectedFile.file.path}</p>
+                <span className="text-[10px] font-mono text-slate-600">{selectedFile.file.language}</span>
+              </div>
+              {(selectedFile.truncated || selectedFile.redacted) && (
+                <p className="mt-2 text-[10px] font-mono text-amber-300">
+                  {selectedFile.truncated ? "Preview truncated. " : ""}
+                  {selectedFile.redacted ? "Potential secrets redacted." : ""}
+                </p>
+              )}
+              <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded bg-black/30 p-3 text-xs font-mono leading-5 text-slate-300">
+                {selectedFile.content}
+              </pre>
+            </div>
+          ) : (
+            <p className="mt-3 text-xs font-mono text-slate-600">Select a file to preview its content.</p>
+          )}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function FileTreeItem({ node, onFileSelect, depth = 0 }: {
+  node: FileTreeNode;
+  onFileSelect: (path: string) => void;
+  depth?: number;
+}) {
+  if (node.type === "directory") {
+    return (
+      <div>
+        <p className="py-1 text-xs font-mono text-slate-500" style={{ paddingLeft: `${depth * 12}px` }}>
+          {node.name}/
+        </p>
+        <div>
+          {(node.children ?? []).map((child) => (
+            <FileTreeItem key={child.path} node={child} onFileSelect={onFileSelect} depth={depth + 1} />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => onFileSelect(node.path)}
+      className="block w-full truncate rounded px-2 py-1 text-left text-xs font-mono text-slate-300 hover:bg-slate-900/70 hover:text-cyan-300"
+      style={{ paddingLeft: `${depth * 12 + 8}px` }}
+    >
+      {node.name}
+    </button>
   );
 }
 
@@ -282,6 +487,25 @@ function ContextPreviewPanel({ context, onClose }: { context: ProjectContext; on
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
         <ContextMessageList title="Recent messages" messages={context.recent_messages} />
         <ContextMessageList title="Relevant previous messages" messages={context.relevant_messages} />
+      </div>
+      <div className="mt-4 rounded border border-slate-800 bg-[#030810] p-3">
+        <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500">
+          File tree ({context.file_tree.length})
+        </p>
+        {context.file_tree.length === 0 ? (
+          <p className="mt-3 text-xs font-mono text-slate-600">No workspace file metadata selected.</p>
+        ) : (
+          <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+            {context.file_tree.slice(0, 12).map((file) => (
+              <div key={String(file.path)} className="rounded border border-slate-800 px-2 py-2">
+                <p className="truncate text-xs font-mono text-slate-300">{String(file.path)}</p>
+                <p className="mt-1 text-[10px] font-mono text-slate-600">
+                  {String(file.language ?? "plaintext")} · {String(file.size ?? 0)} bytes
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       {context.known_limitations.length > 0 && (
         <div className="mt-4 border-t border-cyan-900/40 pt-3">

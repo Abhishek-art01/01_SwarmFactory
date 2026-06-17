@@ -1,10 +1,11 @@
 import logging
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from project_context import project_context_builder
+from project_files.service import FileTooLargeError, InvalidFilePathError, project_file_service
 from project_history.service import (
     ForbiddenError,
     NotFoundError,
@@ -41,7 +42,16 @@ class MessageCreateRequest(BaseModel):
     metadata_json: dict[str, Any] = Field(default_factory=dict)
 
 
+class FileContentRequest(BaseModel):
+    path: str = Field(..., min_length=1, max_length=500)
+    content: str = Field(..., max_length=300000)
+
+
 def _handle_history_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, InvalidFilePathError):
+        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": "invalid_file_path", "message": str(exc)})
+    if isinstance(exc, FileTooLargeError):
+        return HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail={"error": "file_too_large", "message": str(exc)})
     if isinstance(exc, NotFoundError):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": str(exc)})
     if isinstance(exc, ForbiddenError):
@@ -152,6 +162,62 @@ async def get_project_context(project_id: str, conversation_id: str) -> dict[str
             project_id=project_id,
             conversation_id=conversation_id,
             user_id=current_user_id(),
+        )
+    except Exception as exc:
+        raise _handle_history_error(exc) from exc
+
+
+@router.get("/projects/{project_id}/workspaces/{workspace_id}/files")
+async def list_workspace_files(project_id: str, workspace_id: str) -> list[dict[str, Any]]:
+    try:
+        return await project_file_service.list_files(current_user_id(), project_id, workspace_id)
+    except Exception as exc:
+        raise _handle_history_error(exc) from exc
+
+
+@router.get("/projects/{project_id}/workspaces/{workspace_id}/files/tree")
+async def get_workspace_file_tree(project_id: str, workspace_id: str) -> dict[str, Any]:
+    try:
+        return await project_file_service.list_file_tree(current_user_id(), project_id, workspace_id)
+    except Exception as exc:
+        raise _handle_history_error(exc) from exc
+
+
+@router.get("/projects/{project_id}/workspaces/{workspace_id}/files/content")
+async def get_workspace_file_content(
+    project_id: str,
+    workspace_id: str,
+    path: str = Query(..., min_length=1, max_length=500),
+) -> dict[str, Any]:
+    try:
+        return await project_file_service.read_file(current_user_id(), project_id, workspace_id, path)
+    except Exception as exc:
+        raise _handle_history_error(exc) from exc
+
+
+@router.post("/projects/{project_id}/workspaces/{workspace_id}/files", status_code=status.HTTP_201_CREATED)
+async def create_workspace_file(project_id: str, workspace_id: str, payload: FileContentRequest) -> dict[str, Any]:
+    try:
+        return await project_file_service.upsert_file(
+            current_user_id(),
+            project_id,
+            workspace_id,
+            payload.path,
+            payload.content,
+        )
+    except Exception as exc:
+        raise _handle_history_error(exc) from exc
+
+
+@router.put("/projects/{project_id}/workspaces/{workspace_id}/files/content")
+async def update_workspace_file_content(project_id: str, workspace_id: str, payload: FileContentRequest) -> dict[str, Any]:
+    try:
+        return await project_file_service.upsert_file(
+            current_user_id(),
+            project_id,
+            workspace_id,
+            payload.path,
+            payload.content,
         )
     except Exception as exc:
         raise _handle_history_error(exc) from exc

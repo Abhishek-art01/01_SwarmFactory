@@ -111,6 +111,45 @@ export interface ProjectContext {
   next_recommended_actions: string[];
 }
 
+export interface WorkspaceFile {
+  id: string;
+  project_id: string;
+  workspace_id: string;
+  user_id: string;
+  path: string;
+  name: string;
+  language: string;
+  size: number;
+  hash: string;
+  content_blob_name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FileTreeNode {
+  name: string;
+  path: string;
+  type: "directory" | "file";
+  children?: FileTreeNode[];
+  language?: string;
+  size?: number;
+  hash?: string;
+  updated_at?: string;
+}
+
+export interface FileTreeResponse {
+  workspace_id: string;
+  files: WorkspaceFile[];
+  tree: FileTreeNode[];
+}
+
+export interface FileContentResponse {
+  file: WorkspaceFile;
+  content: string;
+  truncated: boolean;
+  redacted: boolean;
+}
+
 // ─── Agent status shapes ──────────────────────────────────────────────────────
 
 export type AgentStatus = "idle" | "running" | "done" | "error";
@@ -389,6 +428,31 @@ export async function getConversationMessages(conversationId: string): Promise<C
 
 export async function getProjectContext(projectId: string, conversationId: string): Promise<ProjectContext> {
   return apiFetch<ProjectContext>(`/api/projects/${projectId}/conversations/${conversationId}/context`);
+}
+
+export async function getWorkspaceFileTree(projectId: string, workspaceId: string): Promise<FileTreeResponse> {
+  return apiFetch<FileTreeResponse>(`/api/projects/${projectId}/workspaces/${workspaceId}/files/tree`);
+}
+
+export async function getWorkspaceFileContent(
+  projectId: string,
+  workspaceId: string,
+  path: string
+): Promise<FileContentResponse> {
+  return apiFetch<FileContentResponse>(
+    `/api/projects/${projectId}/workspaces/${workspaceId}/files/content?path=${encodeURIComponent(path)}`
+  );
+}
+
+export async function saveWorkspaceFile(
+  projectId: string,
+  workspaceId: string,
+  payload: { path: string; content: string }
+): Promise<WorkspaceFile> {
+  return apiFetch<WorkspaceFile>(`/api/projects/${projectId}/workspaces/${workspaceId}/files`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function createConversationMessage(

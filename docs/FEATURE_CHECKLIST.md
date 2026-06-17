@@ -28,6 +28,17 @@
 * [x] Context limits added
 * [x] Tests added
 
+### Feature 3: File Storage + File Tree Foundation
+
+* [x] Workspace file metadata support added
+* [x] File tree API added
+* [x] Safe file read API added
+* [x] Basic file create/update support added if appropriate
+* [x] File tree connected to project context builder
+* [x] Frontend file explorer added
+* [x] Basic file preview added
+* [x] Tests added
+
 ## To Do Later
 
 ### Auth / User Ownership
@@ -53,6 +64,15 @@
 * [ ] Add safer concurrent write handling
 * [ ] Add search/indexing for messages and projects
 * [ ] Add backup and recovery strategy
+
+### Future File Editing Features
+
+* [ ] Real AI file editing
+* [ ] File diff viewer
+* [ ] User approval before applying edits
+* [ ] File version rollback
+* [ ] Agent run file-change tracking
+* [ ] Test/build integration after edits
 
 ### Future Features Not Added Yet
 

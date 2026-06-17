@@ -3,6 +3,7 @@ from typing import Any
 
 from core.config import settings
 from project_context.models import ContextMessage, ProjectContext
+from project_files.service import ProjectFileService
 from project_history.service import (
     ForbiddenError,
     ProjectHistoryService,
@@ -79,8 +80,13 @@ def _context_message(message: dict[str, Any], max_chars: int) -> ContextMessage:
 
 
 class ProjectContextBuilder:
-    def __init__(self, history_service: ProjectHistoryService = project_history_service) -> None:
+    def __init__(
+        self,
+        history_service: ProjectHistoryService = project_history_service,
+        file_service: ProjectFileService | None = None,
+    ) -> None:
         self.history_service = history_service
+        self.file_service = file_service or ProjectFileService(history_service)
 
     async def build_project_context(
         self,
@@ -121,6 +127,15 @@ class ProjectContextBuilder:
             recent_messages=recent_raw,
             limit=relevant_limit,
         )
+        known_limitations = [
+            "Conversation summaries are currently lightweight placeholders.",
+            "Real code editing and file-change memory are not enabled yet.",
+        ]
+        try:
+            file_tree = await self.file_service.context_file_tree(user_id, project_id, workspace["id"])
+        except Exception:
+            file_tree = []
+            known_limitations.append("Workspace file tree could not be loaded for this context.")
 
         return {
             "project": _sanitize_record(project),
@@ -129,12 +144,8 @@ class ProjectContextBuilder:
             "recent_messages": [_context_message(message, per_message_limit) for message in recent_raw],
             "relevant_messages": [_context_message(message, per_message_limit) for message in relevant_raw],
             "summary": self._summary(project, conversation, all_messages),
-            "file_tree": [],
-            "known_limitations": [
-                "Project file storage is not connected to this context builder yet.",
-                "Conversation summaries are currently lightweight placeholders.",
-                "Real code editing and file-change memory are not enabled yet.",
-            ],
+            "file_tree": file_tree,
+            "known_limitations": known_limitations,
             "next_recommended_actions": [
                 "Use this context object when wiring the real coding-agent execution flow.",
                 "Add project file indexing before allowing automated edits.",

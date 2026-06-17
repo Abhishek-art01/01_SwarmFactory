@@ -109,6 +109,18 @@ class Settings(BaseSettings):
         default=12000,
         description="Maximum approximate character budget for generated project context",
     )
+    PROJECT_FILES_MAX_FILE_SIZE: int = Field(
+        default=256_000,
+        description="Maximum project file size in bytes accepted by workspace file storage",
+    )
+    PROJECT_FILES_MAX_PREVIEW_CHARS: int = Field(
+        default=20_000,
+        description="Maximum characters returned by workspace file preview API",
+    )
+    PROJECT_FILES_BLOB_PREFIX: str = Field(
+        default="workspace-files",
+        description="Azure Blob prefix used for workspace file content",
+    )
     # Bing Search
     BING_SEARCH_API_KEY: str = Field(default="", description="Bing Search API key")
     AZURE_OPENAI_API_VERSION: str = Field(
