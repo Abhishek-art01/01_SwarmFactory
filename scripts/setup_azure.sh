@@ -23,6 +23,8 @@ RESOURCE_GROUP="${RESOURCE_GROUP:-swarm-factory-rg}"
 LOCATION="${LOCATION:-eastus}"
 OPENAI_RESOURCE="${OPENAI_RESOURCE:-swarm-factory-openai}"
 SEARCH_RESOURCE="${SEARCH_RESOURCE:-swarm-factory-search}"
+STORAGE_ACCOUNT="${STORAGE_ACCOUNT:-swarmfactorystate}"
+STORAGE_CONTAINER="${STORAGE_CONTAINER:-swarm-factory-state}"
 ACR_NAME="${ACR_NAME:-swarmfactoryacr}"
 CONTAINER_ENV="${CONTAINER_ENV:-swarm-factory-env}"
 APP_NAME="${APP_NAME:-swarm-factory-api}"
@@ -133,7 +135,31 @@ SEARCH_KEY=$(az search admin-key show \
 
 success "Azure AI Search ready: $SEARCH_ENDPOINT"
 
-# ── 8. Azure Container Registry ───────────────────────────────────────────────
+# ── 8. Azure Storage for project chat history ─────────────────────────────────
+info "Creating Azure Storage account for project history: $STORAGE_ACCOUNT..."
+az storage account create \
+    --name "$STORAGE_ACCOUNT" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$LOCATION" \
+    --sku Standard_LRS \
+    --kind StorageV2 \
+    --allow-blob-public-access false \
+    --output none 2>/dev/null || warn "Storage account may already exist"
+
+STORAGE_CONNECTION_STRING=$(az storage account show-connection-string \
+    --name "$STORAGE_ACCOUNT" \
+    --resource-group "$RESOURCE_GROUP" \
+    --query connectionString -o tsv)
+
+az storage container create \
+    --name "$STORAGE_CONTAINER" \
+    --connection-string "$STORAGE_CONNECTION_STRING" \
+    --public-access off \
+    --output none >/dev/null
+
+success "Azure Storage ready: $STORAGE_ACCOUNT/$STORAGE_CONTAINER"
+
+# ── 9. Azure Container Registry ───────────────────────────────────────────────
 info "Creating Azure Container Registry: $ACR_NAME..."
 az acr create \
     --name "$ACR_NAME" \
@@ -149,7 +175,7 @@ ACR_LOGIN_SERVER=$(az acr show \
 
 success "ACR ready: $ACR_LOGIN_SERVER"
 
-# ── 9. Container Apps Environment ────────────────────────────────────────────
+# ── 10. Container Apps Environment ───────────────────────────────────────────
 info "Creating Container Apps environment: $CONTAINER_ENV..."
 az containerapp env create \
     --name "$CONTAINER_ENV" \
@@ -159,7 +185,7 @@ az containerapp env create \
 
 success "Container Apps environment ready"
 
-# ── 10. Write .env file ───────────────────────────────────────────────────────
+# ── 11. Write .env file ───────────────────────────────────────────────────────
 ENV_FILE=".env"
 info "Writing credentials to $ENV_FILE..."
 
@@ -180,6 +206,12 @@ AZURE_OPENAI_API_VERSION=2024-02-01
 AZURE_SEARCH_ENDPOINT=${SEARCH_ENDPOINT}
 AZURE_SEARCH_API_KEY=${SEARCH_KEY}
 AZURE_SEARCH_INDEX_NAME=swarm-memory
+
+# ── Azure Storage ─────────────────────────────────────────
+AZURE_STORAGE_CONNECTION_STRING=${STORAGE_CONNECTION_STRING}
+AZURE_STORAGE_CONTAINER=${STORAGE_CONTAINER}
+PROJECT_HISTORY_BLOB_NAME=project-history/state.json
+DEFAULT_USER_ID=default-user
 
 # ── Azure Container Apps ──────────────────────────────────
 AZURE_SUBSCRIPTION_ID=${SUBSCRIPTION}
@@ -213,7 +245,7 @@ ENVEOF
 
 success ".env file written"
 
-# ── 11. Summary ───────────────────────────────────────────────────────────────
+# ── 12. Summary ───────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}============================================================${NC}"
 echo -e "${GREEN}  Azure setup complete!${NC}"
@@ -222,6 +254,7 @@ echo ""
 echo "  Resource Group:      $RESOURCE_GROUP"
 echo "  OpenAI Endpoint:     $OPENAI_ENDPOINT"
 echo "  Search Endpoint:     $SEARCH_ENDPOINT"
+echo "  Storage Account:     $STORAGE_ACCOUNT"
 echo "  Container Registry:  $ACR_LOGIN_SERVER"
 echo "  Container Apps Env:  $CONTAINER_ENV"
 echo ""

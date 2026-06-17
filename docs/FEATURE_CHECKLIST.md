@@ -1,0 +1,65 @@
+# Swarm Factory Feature Checklist
+
+## Completed
+
+### Feature 1: Project-Based Chat History
+
+* [x] Project model support added
+* [x] Workspace model support added
+* [x] Conversation model support added
+* [x] Message model support added
+* [x] Azure Blob JSON state store added
+* [x] Project list/create UI added
+* [x] Project chat page added
+* [x] Conversation sidebar added
+* [x] Message history persistence added
+* [x] User message saves before assistant response
+* [x] Deployment now requires `AZURE_STORAGE_CONNECTION_STRING`
+
+### Feature 2: Code Editing Memory / Context System
+
+* [x] Code editing memory / context system foundation
+* [x] Project context builder added
+* [x] Recent message context added
+* [x] Relevant message placeholder added
+* [x] Project/workspace/conversation context added
+* [x] Context preview API added
+* [x] Chat flow now builds context before assistant acknowledgement
+* [x] Context limits added
+* [x] Tests added
+
+## To Do Later
+
+### Auth / User Ownership
+
+* [ ] Replace `DEFAULT_USER_ID` with real multi-user authentication
+* [ ] Use real logged-in user id from auth token/session
+* [ ] Add project ownership checks
+* [ ] Add conversation ownership checks
+* [ ] Prevent users from accessing other users' projects or messages
+
+### Agent Execution
+
+* [ ] Replace saved acknowledgement response with real coding-agent execution
+* [ ] Connect chat instruction to agent orchestration flow
+* [ ] Let agent inspect project files before responding
+* [ ] Let agent plan, edit files, and save changes
+* [ ] Save agent run status and errors
+
+### Storage / Scalability
+
+* [ ] Replace simple Azure Blob JSON state with a high-concurrency database later
+* [ ] Consider PostgreSQL, Azure SQL, Cosmos DB, or another scalable database
+* [ ] Add safer concurrent write handling
+* [ ] Add search/indexing for messages and projects
+* [ ] Add backup and recovery strategy
+
+### Future Features Not Added Yet
+
+* [ ] GitHub import/pull/push
+* [ ] Download project as ZIP
+* [ ] Code runner / sandbox execution
+* [ ] Live terminal logs
+* [ ] Prompt enhancer
+* [ ] Mobile app support
+* [ ] Advanced multi-agent workflow

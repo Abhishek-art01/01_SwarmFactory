@@ -13,6 +13,8 @@ import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
 import Home from "./pages/Home";
 import Dashboard from "./pages/Dashboard";
 import Output from "./pages/Output";
+import Projects from "./pages/Projects";
+import ProjectChat from "./pages/ProjectChat";
 
 // What does this do? Renders a simple 404 page for unmatched routes.
 function NotFound() {
@@ -35,6 +37,8 @@ export default function App() {
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Routes>
         <Route path="/" element={<Home />} />
+        <Route path="/projects" element={<Projects />} />
+        <Route path="/projects/:projectId" element={<ProjectChat />} />
         <Route path="/dashboard/:jobId" element={<Dashboard />} />
         <Route path="/output/:jobId" element={<Output />} />
         <Route path="*" element={<NotFound />} />

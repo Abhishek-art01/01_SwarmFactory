@@ -14,6 +14,7 @@ pydantic-settings==2.3.0
 # ── Job queue ──────────────────────────────────────────────────
 celery==5.4.0
 redis==5.0.6
+azure-storage-blob==12.20.0
 
 # ── Microsoft AI stack (ALL Azure) ─────────────────────────────
 ag2==0.13.2          # AutoGen by Microsoft (Python 3.11+ compatible name)

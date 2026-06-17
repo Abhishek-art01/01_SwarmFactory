@@ -81,6 +81,34 @@ class Settings(BaseSettings):
     AZURE_CONTAINER_APP_ENV: str = Field(default="swarm-factory-env", description="Container Apps env name")
     # Session storage
     SESSION_STORE_PATH: str = Field(default="./sessions", description="Path to session JSON files")
+    AZURE_STORAGE_CONNECTION_STRING: str = Field(
+        default="",
+        description="Azure Storage connection string for persistent project chat history",
+    )
+    AZURE_STORAGE_CONTAINER: str = Field(
+        default="swarm-factory-state",
+        description="Azure Blob container for persistent project chat history",
+    )
+    PROJECT_HISTORY_BLOB_NAME: str = Field(
+        default="project-history/state.json",
+        description="Blob name used for project/conversation/message state",
+    )
+    DEFAULT_USER_ID: str = Field(
+        default="default-user",
+        description="User id used until full user authentication is added",
+    )
+    PROJECT_CONTEXT_RECENT_MESSAGE_LIMIT: int = Field(
+        default=10,
+        description="Maximum recent conversation messages to include in project context",
+    )
+    PROJECT_CONTEXT_RELEVANT_MESSAGE_LIMIT: int = Field(
+        default=5,
+        description="Maximum older relevant messages to include in project context",
+    )
+    PROJECT_CONTEXT_MAX_CHARS: int = Field(
+        default=12000,
+        description="Maximum approximate character budget for generated project context",
+    )
     # Bing Search
     BING_SEARCH_API_KEY: str = Field(default="", description="Bing Search API key")
     AZURE_OPENAI_API_VERSION: str = Field(

@@ -4,6 +4,9 @@
 
 # ── Secrets — NEVER commit these ──────────────────────────────
 .env
+docs
+!docs/
+!docs/FEATURE_CHECKLIST.md
 .env.local
 .env.production
 .env.staging

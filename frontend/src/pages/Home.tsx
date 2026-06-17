@@ -10,7 +10,7 @@
  * and a faint animated grid background to suggest a command terminal.
  */
 
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { RequirementInput, SwarmOptions } from "../components/RequirementInput";
 import { useJob } from "../hooks/useJob";
 import { GenerateRequest } from "../lib/api";
@@ -116,6 +116,13 @@ export default function Home() {
       <div className="relative w-full">
         <RequirementInput onSubmit={handleSubmit} isLoading={isCreating} />
       </div>
+
+      <Link
+        to="/projects"
+        className="relative mt-5 text-xs font-mono text-cyan-500 hover:text-cyan-300"
+      >
+        Open project chat history
+      </Link>
 
       {/* API error bubble */}
       {createError && (

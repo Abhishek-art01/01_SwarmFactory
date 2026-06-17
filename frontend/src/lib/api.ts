@@ -34,6 +34,83 @@ export interface GenerateResponse {
   job_id: string;
 }
 
+export interface Project {
+  id: string;
+  user_id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  default_workspace_id?: string;
+}
+
+export interface Workspace {
+  id: string;
+  project_id: string;
+  user_id: string;
+  name: string;
+  storage_key: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectDetail extends Project {
+  workspaces: Workspace[];
+}
+
+export interface Conversation {
+  id: string;
+  project_id: string;
+  workspace_id: string;
+  user_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  archived?: boolean;
+}
+
+export type MessageRole = "user" | "assistant" | "system" | "agent";
+
+export interface ChatMessage {
+  id: string;
+  conversation_id: string;
+  project_id: string;
+  workspace_id: string;
+  user_id: string;
+  role: MessageRole;
+  content: string;
+  agent_name?: string | null;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface CreateMessageResponse {
+  message: ChatMessage;
+  assistant_message?: ChatMessage;
+}
+
+export interface ContextMessage {
+  id: string;
+  role: MessageRole;
+  content: string;
+  agent_name?: string | null;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ProjectContext {
+  project: Record<string, unknown>;
+  workspace: Record<string, unknown>;
+  conversation: Record<string, unknown>;
+  recent_messages: ContextMessage[];
+  relevant_messages: ContextMessage[];
+  summary: string;
+  file_tree: Array<Record<string, unknown>>;
+  known_limitations: string[];
+  next_recommended_actions: string[];
+}
+
 // ─── Agent status shapes ──────────────────────────────────────────────────────
 
 export type AgentStatus = "idle" | "running" | "done" | "error";
@@ -270,6 +347,75 @@ export async function generateJob(payload: GenerateRequest): Promise<GenerateRes
   return apiFetch<GenerateResponse>("/api/generate", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export async function listProjects(): Promise<Project[]> {
+  return apiFetch<Project[]>("/api/projects");
+}
+
+export async function createProject(payload: { name: string; description?: string }): Promise<Project> {
+  return apiFetch<Project>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getProject(projectId: string): Promise<ProjectDetail> {
+  return apiFetch<ProjectDetail>(`/api/projects/${projectId}`);
+}
+
+export async function listConversations(projectId: string): Promise<Conversation[]> {
+  return apiFetch<Conversation[]>(`/api/projects/${projectId}/conversations`);
+}
+
+export async function createConversation(
+  projectId: string,
+  payload: { workspace_id?: string; title?: string } = {}
+): Promise<Conversation> {
+  return apiFetch<Conversation>(`/api/projects/${projectId}/conversations`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getLatestConversation(projectId: string): Promise<Conversation | null> {
+  return apiFetch<Conversation | null>(`/api/projects/${projectId}/conversations/latest`);
+}
+
+export async function getConversationMessages(conversationId: string): Promise<ChatMessage[]> {
+  return apiFetch<ChatMessage[]>(`/api/conversations/${conversationId}/messages`);
+}
+
+export async function getProjectContext(projectId: string, conversationId: string): Promise<ProjectContext> {
+  return apiFetch<ProjectContext>(`/api/projects/${projectId}/conversations/${conversationId}/context`);
+}
+
+export async function createConversationMessage(
+  conversationId: string,
+  payload: {
+    role: MessageRole;
+    content: string;
+    agent_name?: string | null;
+    metadata_json?: Record<string, unknown>;
+  }
+): Promise<CreateMessageResponse> {
+  return apiFetch<CreateMessageResponse>(`/api/conversations/${conversationId}/messages`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateConversationTitle(conversationId: string, title: string): Promise<Conversation> {
+  return apiFetch<Conversation>(`/api/conversations/${conversationId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+}
+
+export async function archiveConversation(conversationId: string): Promise<Conversation> {
+  return apiFetch<Conversation>(`/api/conversations/${conversationId}`, {
+    method: "DELETE",
   });
 }
 

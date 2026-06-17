@@ -29,7 +29,7 @@ from core.config import settings
 from api.middleware.auth import AuthMiddleware
 from api.middleware.rate_limit import RateLimitMiddleware
 from api.middleware.error_handler import register_exception_handlers
-from api.routes import health, generate, status, output
+from api.routes import health, generate, status, output, projects
 from api.websocket import router as ws_router
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
@@ -174,6 +174,7 @@ def create_app() -> FastAPI:
     app.include_router(generate.router, prefix="/api")         # POST /api/generate
     app.include_router(status.router, prefix="/api")           # GET  /api/status/{job_id}
     app.include_router(output.router, prefix="/api")           # GET  /api/output/{job_id}
+    app.include_router(projects.router, prefix="/api")         # Project chat history
 
     # ── WebSocket router ──────────────────────────────────────────────────────
     app.include_router(ws_router)                              # WS /ws/{job_id}
