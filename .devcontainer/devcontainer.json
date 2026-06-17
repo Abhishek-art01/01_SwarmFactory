@@ -1,6 +1,6 @@
 {
   "name": "01_SwarmFactory",
-  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11-bookworm",
   "features": {
     "ghcr.io/devcontainers/features/node:1": {
       "version": "20"
