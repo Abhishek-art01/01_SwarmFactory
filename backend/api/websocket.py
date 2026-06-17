@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 from starlette.websockets import WebSocketState
 
 from core.config import settings
+from core.security import api_keys_match
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +174,7 @@ def _authenticate(websocket: WebSocket) -> tuple[bool, str | None, str | None]:
     )
     if not token:
         return False, None, "Missing WebSocket API key"
-    if token != settings.API_KEY:
+    if not api_keys_match(token, settings.API_KEY):
         return False, None, "Invalid WebSocket API key"
     return True, "api-key", None
 

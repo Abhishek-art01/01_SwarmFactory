@@ -16,6 +16,7 @@ services:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app/backend
       - REDIS_URL=redis://redis:6379/0
+      - API_KEY=swarm-factory-dev-key
     depends_on:
       - redis
     restart: unless-stopped
@@ -30,10 +31,17 @@ services:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app/backend
       - REDIS_URL=redis://redis:6379/0
+      - API_KEY=swarm-factory-dev-key
     command: celery -A backend.celery_app worker --loglevel=info --concurrency=4
     depends_on:
       - redis
       - backend
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A backend.celery_app inspect ping -d celery@$$HOSTNAME | grep -q OK"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
   frontend:

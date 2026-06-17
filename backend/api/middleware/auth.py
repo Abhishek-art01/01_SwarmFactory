@@ -19,6 +19,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
 
 from core.config import settings
+from core.security import api_keys_match
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 content={"error": "missing_api_key", "message": "X-API-Key header is required"},
             )
 
-        if api_key != settings.API_KEY:
+        if not api_keys_match(api_key, settings.API_KEY):
             logger.warning(
                 "Invalid API key",
                 extra={"path": path, "ip": request.client.host if request.client else "unknown"},

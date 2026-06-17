@@ -214,7 +214,10 @@ class Settings(BaseSettings):
         """Extra redis-py kwargs needed for rediss:// connections."""
         if not self.redis_uses_ssl:
             return {}
-        return {"ssl_cert_reqs": self.redis_ssl_cert_reqs}
+        # redis-py 5.0.x only initialises RedisSSLContext.cert_reqs when
+        # ssl_cert_reqs is passed as one of these strings. Passing ssl.CERT_*
+        # enum values leaves the attribute unset and crashes on connect.
+        return {"ssl_cert_reqs": self.REDIS_SSL_CERT_REQS}
 
     @property
     def celery_redis_ssl_options(self) -> dict | None:
