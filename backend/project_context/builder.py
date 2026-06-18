@@ -136,6 +136,27 @@ class ProjectContextBuilder:
         except Exception:
             file_tree = []
             known_limitations.append("Workspace file tree could not be loaded for this context.")
+        pending_changes = [
+            {
+                "id": change.get("id", ""),
+                "file_path": change.get("file_path", ""),
+                "change_type": change.get("change_type", ""),
+                "status": change.get("status", ""),
+                "created_at": change.get("created_at", ""),
+            }
+            for change in sorted(
+                [
+                    change
+                    for change in state.get("file_changes", {}).values()
+                    if change.get("project_id") == project_id
+                    and change.get("workspace_id") == workspace["id"]
+                    and change.get("user_id") == user_id
+                    and change.get("status") == "pending"
+                ],
+                key=lambda item: item.get("created_at", ""),
+                reverse=True,
+            )[:10]
+        ]
 
         return {
             "project": _sanitize_record(project),
@@ -145,6 +166,7 @@ class ProjectContextBuilder:
             "relevant_messages": [_context_message(message, per_message_limit) for message in relevant_raw],
             "summary": self._summary(project, conversation, all_messages),
             "file_tree": file_tree,
+            "pending_changes": pending_changes,
             "known_limitations": known_limitations,
             "next_recommended_actions": [
                 "Use this context object when wiring the real coding-agent execution flow.",

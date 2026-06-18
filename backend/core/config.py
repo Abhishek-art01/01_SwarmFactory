@@ -121,6 +121,14 @@ class Settings(BaseSettings):
         default="workspace-files",
         description="Azure Blob prefix used for workspace file content",
     )
+    PROJECT_CHANGES_MAX_DIFF_CHARS: int = Field(
+        default=80_000,
+        description="Maximum characters stored for a generated file-change diff",
+    )
+    PROJECT_CHANGES_MAX_PROPOSED_CONTENT_CHARS: int = Field(
+        default=300_000,
+        description="Maximum characters accepted for a proposed file change",
+    )
     # Bing Search
     BING_SEARCH_API_KEY: str = Field(default="", description="Bing Search API key")
     AZURE_OPENAI_API_VERSION: str = Field(

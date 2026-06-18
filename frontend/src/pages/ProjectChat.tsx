@@ -3,16 +3,21 @@ import { Link, useParams } from "react-router-dom";
 import {
   ChatMessage,
   Conversation,
+  approveWorkspaceChange,
   createConversation,
   createConversationMessage,
+  createWorkspaceChange,
   getConversationMessages,
   getLatestConversation,
   getProject,
   getProjectContext,
   getWorkspaceFileContent,
   getWorkspaceFileTree,
+  listWorkspaceChanges,
   listConversations,
+  rejectWorkspaceChange,
   saveWorkspaceFile,
+  FileChangeProposal,
   FileContentResponse,
   FileTreeNode,
   FileTreeResponse,
@@ -35,8 +40,14 @@ export default function ProjectChat() {
   const [selectedFile, setSelectedFile] = useState<FileContentResponse | null>(null);
   const [filePath, setFilePath] = useState("README.md");
   const [fileContent, setFileContent] = useState("# Project notes\n");
+  const [changePath, setChangePath] = useState("README.md");
+  const [changeContent, setChangeContent] = useState("hello new\n");
+  const [changeType, setChangeType] = useState<"create" | "update">("update");
+  const [changes, setChanges] = useState<FileChangeProposal[]>([]);
+  const [isChangesLoading, setIsChangesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [changeError, setChangeError] = useState<string | null>(null);
   const [contextPreview, setContextPreview] = useState<ProjectContext | null>(null);
   const messageEndRef = useRef<HTMLDivElement>(null);
 
@@ -63,6 +74,21 @@ export default function ProjectChat() {
     }
   };
 
+  const refreshChanges = async (id: string, workspace: string) => {
+    setIsChangesLoading(true);
+    setChangeError(null);
+    try {
+      const items = await listWorkspaceChanges(id, workspace);
+      setChanges(items);
+      return items;
+    } catch (err) {
+      setChangeError(err instanceof Error ? err.message : "Could not load file changes");
+      return [];
+    } finally {
+      setIsChangesLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!projectId) return;
     const id = projectId;
@@ -80,7 +106,10 @@ export default function ProjectChat() {
         setProject(projectResult);
         const firstWorkspaceId = projectResult.workspaces[0]?.id;
         if (firstWorkspaceId) {
-          await refreshFiles(id, firstWorkspaceId);
+          await Promise.all([
+            refreshFiles(id, firstWorkspaceId),
+            refreshChanges(id, firstWorkspaceId),
+          ]);
         }
         const all = await refreshConversations(id);
         if (cancelled) return;
@@ -176,6 +205,61 @@ export default function ProjectChat() {
       setFileError(err instanceof Error ? err.message : "Could not save file");
     } finally {
       setIsFilesLoading(false);
+    }
+  };
+
+  const createChange = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!projectId || !workspaceId || !changePath.trim()) return;
+    setIsChangesLoading(true);
+    setChangeError(null);
+    try {
+      await createWorkspaceChange(projectId, workspaceId, {
+        path: changePath,
+        proposed_content: changeContent,
+        change_type: changeType,
+      });
+      await refreshChanges(projectId, workspaceId);
+    } catch (err) {
+      setChangeError(err instanceof Error ? err.message : "Could not create change proposal");
+    } finally {
+      setIsChangesLoading(false);
+    }
+  };
+
+  const approveChange = async (changeId: string) => {
+    if (!projectId || !workspaceId) return;
+    setIsChangesLoading(true);
+    setChangeError(null);
+    try {
+      const applied = await approveWorkspaceChange(projectId, workspaceId, changeId);
+      await Promise.all([
+        refreshChanges(projectId, workspaceId),
+        refreshFiles(projectId, workspaceId),
+      ]);
+      if (selectedFile?.file.path === applied.file_path) {
+        setSelectedFile(await getWorkspaceFileContent(projectId, workspaceId, applied.file_path));
+      }
+    } catch (err) {
+      setChangeError(err instanceof Error ? err.message : "Could not approve change");
+      await refreshChanges(projectId, workspaceId);
+    } finally {
+      setIsChangesLoading(false);
+    }
+  };
+
+  const rejectChange = async (changeId: string) => {
+    if (!projectId || !workspaceId) return;
+    setIsChangesLoading(true);
+    setChangeError(null);
+    try {
+      await rejectWorkspaceChange(projectId, workspaceId, changeId);
+      await refreshChanges(projectId, workspaceId);
+    } catch (err) {
+      setChangeError(err instanceof Error ? err.message : "Could not reject change");
+      await refreshChanges(projectId, workspaceId);
+    } finally {
+      setIsChangesLoading(false);
     }
   };
 
@@ -335,6 +419,18 @@ export default function ProjectChat() {
           onFileContentChange={setFileContent}
           onFileSelect={selectFile}
           onSaveFile={saveFile}
+          changes={changes}
+          isChangesLoading={isChangesLoading}
+          changeError={changeError}
+          changePath={changePath}
+          changeContent={changeContent}
+          changeType={changeType}
+          onChangePathChange={setChangePath}
+          onChangeContentChange={setChangeContent}
+          onChangeTypeChange={setChangeType}
+          onCreateChange={createChange}
+          onApproveChange={approveChange}
+          onRejectChange={rejectChange}
         />
       </main>
     </div>
@@ -352,6 +448,18 @@ function FileWorkspacePanel({
   onFileContentChange,
   onFileSelect,
   onSaveFile,
+  changes,
+  isChangesLoading,
+  changeError,
+  changePath,
+  changeContent,
+  changeType,
+  onChangePathChange,
+  onChangeContentChange,
+  onChangeTypeChange,
+  onCreateChange,
+  onApproveChange,
+  onRejectChange,
 }: {
   fileTree: FileTreeResponse | null;
   selectedFile: FileContentResponse | null;
@@ -363,6 +471,18 @@ function FileWorkspacePanel({
   onFileContentChange: (value: string) => void;
   onFileSelect: (path: string) => void;
   onSaveFile: (event: FormEvent) => void;
+  changes: FileChangeProposal[];
+  isChangesLoading: boolean;
+  changeError: string | null;
+  changePath: string;
+  changeContent: string;
+  changeType: "create" | "update";
+  onChangePathChange: (value: string) => void;
+  onChangeContentChange: (value: string) => void;
+  onChangeTypeChange: (value: "create" | "update") => void;
+  onCreateChange: (event: FormEvent) => void;
+  onApproveChange: (changeId: string) => void;
+  onRejectChange: (changeId: string) => void;
 }) {
   return (
     <aside className="rounded-lg border border-slate-800 bg-[#070e17] min-h-[420px] flex flex-col">
@@ -413,6 +533,67 @@ function FileWorkspacePanel({
             {isLoading ? "Saving..." : "Save file"}
           </button>
         </form>
+
+        <form onSubmit={onCreateChange} className="rounded border border-slate-800 bg-[#030810] p-3 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500">Propose Change</p>
+            <select
+              value={changeType}
+              onChange={(event) => onChangeTypeChange(event.target.value as "create" | "update")}
+              className="rounded border border-slate-800 bg-[#070e17] px-2 py-1 text-[10px] font-mono text-slate-300 outline-none focus:border-cyan-800"
+            >
+              <option value="update">update</option>
+              <option value="create">create</option>
+            </select>
+          </div>
+          <input
+            value={changePath}
+            onChange={(event) => onChangePathChange(event.target.value)}
+            className="w-full rounded border border-slate-800 bg-[#070e17] px-2 py-2 text-xs font-mono text-slate-100 outline-none focus:border-cyan-800"
+            placeholder="src/App.tsx"
+          />
+          <textarea
+            value={changeContent}
+            onChange={(event) => onChangeContentChange(event.target.value)}
+            className="min-h-32 w-full resize-y rounded border border-slate-800 bg-[#070e17] px-2 py-2 text-xs font-mono text-slate-100 outline-none focus:border-cyan-800"
+            placeholder="Proposed file content"
+          />
+          <button
+            disabled={isChangesLoading || !changePath.trim()}
+            className="w-full rounded border border-cyan-800/70 bg-cyan-950/40 px-3 py-2 text-[10px] font-mono text-cyan-300 disabled:opacity-40"
+          >
+            {isChangesLoading ? "Saving..." : "Create proposal"}
+          </button>
+        </form>
+
+        <div className="rounded border border-slate-800 bg-[#030810] p-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500">
+              Pending Changes ({changes.length})
+            </p>
+            {isChangesLoading && <span className="text-[10px] font-mono text-slate-600">Loading...</span>}
+          </div>
+          {changeError && (
+            <div className="mt-3 rounded border border-red-800/60 bg-red-950/30 px-3 py-2 text-xs font-mono text-red-300">
+              {changeError}
+            </div>
+          )}
+          {changes.length === 0 ? (
+            <p className="mt-3 text-xs font-mono text-slate-600">No file changes proposed yet.</p>
+          ) : (
+            <div className="mt-3 space-y-3">
+              {changes.map((change) => (
+                <ChangeProposalItem
+                  key={change.id}
+                  change={change}
+                  disabled={isChangesLoading}
+                  onApprove={onApproveChange}
+                  onReject={onRejectChange}
+                />
+              ))}
+            </div>
+          )}
+        </div>
 
         <div className="rounded border border-slate-800 bg-[#030810] p-3">
           <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500">Preview</p>
@@ -469,6 +650,64 @@ function FileTreeItem({ node, onFileSelect, depth = 0 }: {
     >
       {node.name}
     </button>
+  );
+}
+
+function ChangeProposalItem({
+  change,
+  disabled,
+  onApprove,
+  onReject,
+}: {
+  change: FileChangeProposal;
+  disabled: boolean;
+  onApprove: (changeId: string) => void;
+  onReject: (changeId: string) => void;
+}) {
+  const isPending = change.status === "pending";
+  return (
+    <div className="rounded border border-slate-800 bg-[#070e17] p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-xs font-mono text-slate-200">{change.file_path}</p>
+          <p className="mt-1 text-[10px] font-mono text-slate-600">
+            {change.change_type} · {change.status} · {new Date(change.created_at).toLocaleString()}
+          </p>
+        </div>
+        <span
+          className={`shrink-0 rounded border px-2 py-1 text-[10px] font-mono ${
+            change.status === "pending"
+              ? "border-amber-800/60 text-amber-300"
+              : change.status === "rejected"
+                ? "border-red-900/60 text-red-300"
+                : "border-emerald-900/60 text-emerald-300"
+          }`}
+        >
+          {change.status}
+        </span>
+      </div>
+      <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-black/30 p-3 text-[11px] font-mono leading-5 text-slate-300">
+        {change.diff || "No text diff generated."}
+      </pre>
+      {isPending && (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button
+            onClick={() => onReject(change.id)}
+            disabled={disabled}
+            className="rounded border border-red-900/70 bg-red-950/20 px-3 py-2 text-[10px] font-mono text-red-300 disabled:opacity-40"
+          >
+            Reject
+          </button>
+          <button
+            onClick={() => onApprove(change.id)}
+            disabled={disabled}
+            className="rounded border border-emerald-900/70 bg-emerald-950/20 px-3 py-2 text-[10px] font-mono text-emerald-300 disabled:opacity-40"
+          >
+            Approve
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

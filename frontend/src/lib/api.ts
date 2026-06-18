@@ -107,6 +107,7 @@ export interface ProjectContext {
   relevant_messages: ContextMessage[];
   summary: string;
   file_tree: Array<Record<string, unknown>>;
+  pending_changes: Array<Record<string, unknown>>;
   known_limitations: string[];
   next_recommended_actions: string[];
 }
@@ -148,6 +149,34 @@ export interface FileContentResponse {
   content: string;
   truncated: boolean;
   redacted: boolean;
+}
+
+export type FileChangeStatus = "pending" | "approved" | "rejected" | "applied" | "failed";
+export type FileChangeType = "create" | "update" | "delete";
+
+export interface FileChangeProposal {
+  id: string;
+  project_id: string;
+  workspace_id: string;
+  user_id: string;
+  file_path: string;
+  path: string;
+  change_type: FileChangeType;
+  status: FileChangeStatus;
+  old_content_hash: string;
+  new_content_hash: string;
+  old_content_preview: string;
+  new_content_preview: string;
+  diff: string;
+  created_by: string;
+  agent_run_id?: string | null;
+  conversation_id?: string | null;
+  message_id?: string | null;
+  created_at: string;
+  updated_at: string;
+  approved_at?: string | null;
+  rejected_at?: string | null;
+  applied_at?: string | null;
 }
 
 // ─── Agent status shapes ──────────────────────────────────────────────────────
@@ -453,6 +482,48 @@ export async function saveWorkspaceFile(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export async function listWorkspaceChanges(
+  projectId: string,
+  workspaceId: string,
+  status?: FileChangeStatus
+): Promise<FileChangeProposal[]> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : "";
+  return apiFetch<FileChangeProposal[]>(`/api/projects/${projectId}/workspaces/${workspaceId}/changes${query}`);
+}
+
+export async function createWorkspaceChange(
+  projectId: string,
+  workspaceId: string,
+  payload: { path: string; proposed_content: string; change_type?: "create" | "update" }
+): Promise<FileChangeProposal> {
+  return apiFetch<FileChangeProposal>(`/api/projects/${projectId}/workspaces/${workspaceId}/changes`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function approveWorkspaceChange(
+  projectId: string,
+  workspaceId: string,
+  changeId: string
+): Promise<FileChangeProposal> {
+  return apiFetch<FileChangeProposal>(
+    `/api/projects/${projectId}/workspaces/${workspaceId}/changes/${changeId}/approve`,
+    { method: "POST" }
+  );
+}
+
+export async function rejectWorkspaceChange(
+  projectId: string,
+  workspaceId: string,
+  changeId: string
+): Promise<FileChangeProposal> {
+  return apiFetch<FileChangeProposal>(
+    `/api/projects/${projectId}/workspaces/${workspaceId}/changes/${changeId}/reject`,
+    { method: "POST" }
+  );
 }
 
 export async function createConversationMessage(

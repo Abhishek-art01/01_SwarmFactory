@@ -18,5 +18,6 @@ class ProjectContext(TypedDict):
     relevant_messages: list[ContextMessage]
     summary: str
     file_tree: list[dict[str, Any]]
+    pending_changes: list[dict[str, Any]]
     known_limitations: list[str]
     next_recommended_actions: list[str]

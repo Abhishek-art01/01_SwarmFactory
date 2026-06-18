@@ -112,6 +112,7 @@ async def test_context_endpoint_returns_builder_result(monkeypatch):
         "relevant_messages": [],
         "summary": "",
         "file_tree": [],
+        "pending_changes": [],
         "known_limitations": [],
         "next_recommended_actions": [],
     }
@@ -160,6 +161,7 @@ async def test_chat_message_flow_saves_context_aware_assistant_message(monkeypat
                 "relevant_messages": [],
                 "summary": "",
                 "file_tree": [],
+                "pending_changes": [],
                 "known_limitations": [],
                 "next_recommended_actions": [],
             }

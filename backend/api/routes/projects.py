@@ -5,6 +5,8 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from project_context import project_context_builder
+from project_changes import ChangeConflictError, InvalidChangeStatusError, project_change_service
+from project_changes.service import UnsupportedChangeTypeError
 from project_files.service import FileTooLargeError, InvalidFilePathError, project_file_service
 from project_history.service import (
     ForbiddenError,
@@ -47,11 +49,25 @@ class FileContentRequest(BaseModel):
     content: str = Field(..., max_length=300000)
 
 
+class FileChangeCreateRequest(BaseModel):
+    path: str = Field(..., min_length=1, max_length=500)
+    proposed_content: str = Field(..., max_length=300000)
+    change_type: Literal["create", "update"] = "update"
+    conversation_id: str | None = None
+    message_id: str | None = None
+
+
 def _handle_history_error(exc: Exception) -> HTTPException:
     if isinstance(exc, InvalidFilePathError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": "invalid_file_path", "message": str(exc)})
     if isinstance(exc, FileTooLargeError):
         return HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail={"error": "file_too_large", "message": str(exc)})
+    if isinstance(exc, UnsupportedChangeTypeError):
+        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": "unsupported_change_type", "message": str(exc)})
+    if isinstance(exc, InvalidChangeStatusError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"error": "invalid_change_status", "message": str(exc)})
+    if isinstance(exc, ChangeConflictError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"error": "change_conflict", "message": str(exc)})
     if isinstance(exc, NotFoundError):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": str(exc)})
     if isinstance(exc, ForbiddenError):
@@ -218,6 +234,80 @@ async def update_workspace_file_content(project_id: str, workspace_id: str, payl
             workspace_id,
             payload.path,
             payload.content,
+        )
+    except Exception as exc:
+        raise _handle_history_error(exc) from exc
+
+
+@router.get("/projects/{project_id}/workspaces/{workspace_id}/changes")
+async def list_workspace_changes(
+    project_id: str,
+    workspace_id: str,
+    status_filter: str | None = Query(default=None, alias="status"),
+) -> list[dict[str, Any]]:
+    try:
+        return await project_change_service.list_change_proposals(
+            current_user_id(),
+            project_id,
+            workspace_id,
+            status=status_filter,
+        )
+    except Exception as exc:
+        raise _handle_history_error(exc) from exc
+
+
+@router.post("/projects/{project_id}/workspaces/{workspace_id}/changes", status_code=status.HTTP_201_CREATED)
+async def create_workspace_change(project_id: str, workspace_id: str, payload: FileChangeCreateRequest) -> dict[str, Any]:
+    try:
+        return await project_change_service.create_change_proposal(
+            user_id=current_user_id(),
+            project_id=project_id,
+            workspace_id=workspace_id,
+            path=payload.path,
+            proposed_content=payload.proposed_content,
+            change_type=payload.change_type,
+            conversation_id=payload.conversation_id,
+            message_id=payload.message_id,
+            created_by="manual",
+        )
+    except Exception as exc:
+        raise _handle_history_error(exc) from exc
+
+
+@router.get("/projects/{project_id}/workspaces/{workspace_id}/changes/{change_id}")
+async def get_workspace_change(project_id: str, workspace_id: str, change_id: str) -> dict[str, Any]:
+    try:
+        return await project_change_service.get_change_proposal(
+            current_user_id(),
+            project_id,
+            workspace_id,
+            change_id,
+        )
+    except Exception as exc:
+        raise _handle_history_error(exc) from exc
+
+
+@router.post("/projects/{project_id}/workspaces/{workspace_id}/changes/{change_id}/approve")
+async def approve_workspace_change(project_id: str, workspace_id: str, change_id: str) -> dict[str, Any]:
+    try:
+        return await project_change_service.approve_change(
+            current_user_id(),
+            project_id,
+            workspace_id,
+            change_id,
+        )
+    except Exception as exc:
+        raise _handle_history_error(exc) from exc
+
+
+@router.post("/projects/{project_id}/workspaces/{workspace_id}/changes/{change_id}/reject")
+async def reject_workspace_change(project_id: str, workspace_id: str, change_id: str) -> dict[str, Any]:
+    try:
+        return await project_change_service.reject_change(
+            current_user_id(),
+            project_id,
+            workspace_id,
+            change_id,
         )
     except Exception as exc:
         raise _handle_history_error(exc) from exc

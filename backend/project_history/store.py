@@ -21,6 +21,7 @@ def empty_state() -> dict[str, dict[str, Any]]:
         "conversations": {},
         "messages": {},
         "files": {},
+        "file_changes": {},
     }
 
 

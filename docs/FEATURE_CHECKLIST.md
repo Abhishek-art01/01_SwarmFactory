@@ -39,6 +39,20 @@
 * [x] Basic file preview added
 * [x] Tests added
 
+### Feature 4: Diff Viewer + User Approval Flow
+
+* [x] File change proposal model added
+* [x] Proposed change API added
+* [x] Diff generation added
+* [x] Pending changes list API added
+* [x] Approve change API added
+* [x] Reject change API added
+* [x] Approved changes apply to workspace files
+* [x] Rejected changes do not modify files
+* [x] Frontend diff viewer added
+* [x] Pending changes UI added
+* [x] Tests added
+
 ## To Do Later
 
 ### Auth / User Ownership
@@ -68,8 +82,7 @@
 ### Future File Editing Features
 
 * [ ] Real AI file editing
-* [ ] File diff viewer
-* [ ] User approval before applying edits
+* [ ] Agent-generated change proposals
 * [ ] File version rollback
 * [ ] Agent run file-change tracking
 * [ ] Test/build integration after edits
@@ -77,7 +90,7 @@
 ### Future Features Not Added Yet
 
 * [ ] GitHub import/pull/push
-* [ ] Download project as ZIP
+* [ ] ZIP download
 * [ ] Code runner / sandbox execution
 * [ ] Live terminal logs
 * [ ] Prompt enhancer
